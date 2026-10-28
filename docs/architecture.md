@@ -282,6 +282,30 @@ place. Storm mode adds no surface that operates anything: the
 new tools are two reads, and Law 1's registry scan still
 grades the whole catalogue.
 
+**The operator console and the shift handover (Round 9)** add
+the read side of the control room without adding a single
+action to it. One computation — the board — assembles the
+operating picture from the artefacts alone: which incidents
+are live-open (a stated definition: no closure, no gated close
+act, not superseded by a revision or a split), the operative
+work-order version and its decision-derived state, the
+restorations no confirmation has completed, the storm windows
+folded at the board's moment, and the accuracy ledger as it
+stands. The console page renders exactly that computation's
+JSON; the console check re-performs every figure from raw
+store reads and executes the page's own rendering under Node,
+so a figure with no artefact behind it cannot survive the
+gate. The **handover** freezes the same computation at a named
+operator's act into an insert-only artefact whose record hash
+covers its sections; acceptance is a second named act bound
+to that hash, and because the sections re-perform against the
+record as it now stands, any later artefact makes the
+handover stale on its face — the verifier names the drifted
+sections and acceptance refuses a stale handover. Nothing in
+the console or the handover writes to the record beneath
+them: the only new rows are the handover and its acceptance,
+and the only new tools are reads.
+
 ## Stores
 
 One store port, two dialects (`grid_triage/store.py`): SQLite

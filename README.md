@@ -381,6 +381,59 @@ programme.
   severity, a refused early review, stand-down, and the
   verified post-storm review.
 
+## What Round 9 builds
+
+- **The operator console** (`src/grid_triage/static/console.html`,
+  served at `GET /console`) is one static page whose every
+  figure is the board's computation over the artefacts of
+  record (`grid_triage/board.py`): open incidents by severity
+  with their mode stamps, the feeder board, the ETR board with
+  each row's basis on its face — a `not_computable` estimate
+  names its missing input rather than borrowing a number — the
+  work-order queue, the pending-approvals queue, unconfirmed
+  restorations, the ETR accuracy snapshot, and the storm banner,
+  which names the declaring operator and the declaration id
+  while a window is live. The page fetches exactly one read
+  endpoint (`GET /console/data`); it carries no form, no POST
+  and no control verb. Work-order notifications render as what
+  they are: drafted, none sent.
+- **The console check** (`scripts/check_console.py`, the
+  portfolio pattern) grades the page against a planted record:
+  every figure in the JSON re-performs from raw store reads —
+  never through the board service under test — the page's own
+  JavaScript is executed under Node against the API's JSON and
+  must render the same figures, and the static file is scanned
+  for any control or send surface.
+- **The shift handover** (`grid_triage/handover.py`) freezes
+  the board's computation into an artefact of record at a named
+  operator's handover act: open incidents with severity and
+  mode, pending approvals, open work orders, unconfirmed
+  restorations, storm state, and the ETR accuracy snapshot.
+  The artefact is insert-only and content-addressed; its
+  `record_hash` covers its sections exactly, and an independent
+  verifier re-performs each section from the artefacts and
+  names any that does not recompute — including a tampered
+  stored figure.
+- **Acceptance is a second named act**, bound to the
+  handover's record hash. The handing-over operator cannot
+  accept their own handover; a second acceptance is refused
+  naming the standing act; and a handover over a moved record
+  is **stale on its face** — the verifier names the drifted
+  sections and acceptance of a stale handover is refused. The
+  way forward is a fresh handover, superseding the stale one by
+  link. Assembling and accepting mutate nothing underneath:
+  the record's incidents, assessments, orders, estimates and
+  closures are byte-identical before and after.
+- **Law 1 holds**: two read tools join the registry
+  (`get_console_board`, `get_shift_handover`); the console and
+  the handover add no control tool and no send surface.
+  Migration 0009 (both dialects) and surfaces at parity. The
+  demo's storm now changes shift mid-flight: a handover
+  assembled and accepted during the storm, then — after the
+  storm incident closes and the record moves — a stale
+  handover refused at acceptance and a fresh one accepted in
+  its place.
+
 ## Quick start
 
 ```bash
@@ -443,6 +496,16 @@ What is built and what is not, plainly:
   the mode changes is bounded by the storm pack; storm
   reporting cadence and customer communications are later
   rounds.
+- **The console and the handover are read-only over the
+  record (Round 9)**: the console renders the record, it does
+  not operate it — there is no action surface on the page at
+  all, and every approval, decision and close still happens
+  through the governed acts on the API, Runtime and CLI. The
+  handover's staleness is judged against the record's current
+  state, so any later artefact — not only later-timestamped
+  ones — makes an older handover stale; that is the honest
+  reading of "the record has moved", and a fresh handover is
+  cheap.
 - **The AgentCore Policy pack is Round 11.** In R1, Law 1 (no
   control) is enforced by the tool catalogue's construction and
   the registry scan; the Cedar policy pack at the Gateway is the
@@ -469,13 +532,15 @@ src/grid_triage/   models, topology, correlation, services (ingest),
                    severity (R2), cause / memory / packs (R3),
                    roster / etr / closure (R4), work_orders (R5),
                    revisions (R6), restoration (R7), storm (R8),
+                   board / handover / static console (R9),
                    runtime_app / runtime_main (AgentCore Runtime),
                    api, demo, cli, local_invoke, wiring, config
 data/topology/     versioned territory data (v1.json, v2.json)
 data/roster/       versioned crew roster artefact (v1.json)
 migrations/        numbered SQL migrations, sqlite + postgres trees
-tests/             pytest suite (189 tests through R8)
+tests/             pytest suite (205 tests through R9)
 evals/             the eval gate (run_evals.py)
+scripts/           check_console.py — the console correctness check
 docs/              architecture.md — the honest AgentCore mapping
 ```
 
