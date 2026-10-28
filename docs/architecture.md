@@ -299,12 +299,36 @@ gate. The **handover** freezes the same computation at a named
 operator's act into an insert-only artefact whose record hash
 covers its sections; acceptance is a second named act bound
 to that hash, and because the sections re-perform against the
-record as it now stands, any later artefact makes the
-handover stale on its face — the verifier names the drifted
-sections and acceptance refuses a stale handover. Nothing in
+record as it now stands, any later artefact that moves a
+section makes the handover stale on its face — the verifier
+names the drifted sections and acceptance refuses a stale
+handover. Nothing in
 the console or the handover writes to the record beneath
 them: the only new rows are the handover and its acceptance,
 and the only new tools are reads.
+
+**The red team (Round 10)** added no component; it hardened
+three invariants the earlier rounds had left implicit, and
+the full attack record is `docs/red-team.md`. First, the
+computed artefacts are **forward-only**: severity assessments
+and ETR estimates are history in recording order and every
+reader takes the last recorded as current, so a recomputation
+whose `as_of` precedes the standing head's is refused in both
+engines — a head can be superseded, never rewound, and the
+estimate a closure grades against is the estimate of record.
+Second, the **closure act carries the same pack discipline
+as every other act**: its roles are stated in the closure
+pack, and a restoration cannot be dated after the closure's
+own recording, so the accuracy ledger never grades a future
+as fact. Third, **storm scope overlap is a property of the
+recorded timeline, not of an instant**: declarations and
+extensions are checked against every recorded window segment
+— open or closed — they would collide with in time and scope,
+so two windows never cover one feeder and the mode fold's
+first-match rule is never asked to arbitrate an overlap.
+Three findings the round could not fix in scope are recorded
+as open in the red-team record, two of them pinned by
+characterisation tests so changing them is deliberate.
 
 ## Stores
 

@@ -434,6 +434,55 @@ programme.
   handover refused at acceptance and a fresh one accepted in
   its place.
 
+## What Round 10 builds
+
+Round 10 built nothing new — it attacked Rounds 1–9. The full
+record is `docs/red-team.md`: seventeen attacks across alarm
+intake, field updates, topology versions, storm declarations,
+work-order acts, restoration signals, closure acts and the
+console/handover surfaces. Six defects were found and fixed;
+eight attacks held; three findings are recorded as open, with
+severities, rather than silently absorbed. Every defect is
+kept as a regression test (`tests/test_r10.py`) and a
+zero-tolerance eval counter.
+
+- **Recomputations move forward only.** Severity and ETR
+  artefacts are history in recording order and the head is the
+  last one recorded — so a recomputation dated *before* the
+  standing head rewound it: the flood assessed at +300 minutes
+  (SEV-1, 94), then again at +5, showed the stale, quieter
+  picture on every surface, and a backdated ETR estimate
+  became the estimate a closure graded against. Both engines
+  now refuse a recomputation whose `as_of` precedes the head's;
+  the estimate of record is the estimate that stood when the
+  incident was run.
+- **The closure act takes its roles from a pack** (closure
+  pack `2026.10.1`: `operator`, `duty_manager`), like every
+  other act in the system — it previously accepted any
+  non-empty string, including `banana` — and a restoration
+  dated after the closure's own recording is refused, where
+  before a week-future `restored_at` wrote a 9,632-minute
+  "actual" into the accuracy ledger.
+- **Storm scope overlap is judged over the recorded
+  timeline**, at the extension door as well as the declaration
+  door: an extension could widen one open window onto another
+  window's feeder, and a backdated declaration could slip in
+  before an open window — both put two windows over one
+  feeder and let the fold silently name the first recorded.
+  Declarations and extensions are now checked against every
+  recorded window segment they would collide with.
+- **What held** is in the record too: Law 1 on every surface
+  (registry, API routes, Runtime actions, CLI subcommands —
+  scanned, zero control/send verbs; no send mechanism exists
+  in the codebase), the correlation window edge at exactly
+  the pack's 600s, the storm joinable-kinds discipline,
+  act-order and lineage refusals, the post-close contradiction
+  on a split part, topology insert-only versions, and the
+  handover rules — including the staleness rule, stated in
+  the record: staleness is judged over the sections the
+  handover carries, so a figure-preserving artefact (a crew
+  note) does not stale it and a section-moving one does.
+
 ## Quick start
 
 ```bash
@@ -502,10 +551,25 @@ What is built and what is not, plainly:
   all, and every approval, decision and close still happens
   through the governed acts on the API, Runtime and CLI. The
   handover's staleness is judged against the record's current
-  state, so any later artefact — not only later-timestamped
-  ones — makes an older handover stale; that is the honest
-  reading of "the record has moved", and a fresh handover is
-  cheap.
+  state, so any later artefact that moves one of its sections
+  — not only later-timestamped ones — makes an older handover
+  stale; that is the honest reading of "the record has moved",
+  and a fresh handover is cheap. (Round 10 stated the rule
+  precisely: staleness is judged over the six sections the
+  handover carries, so a figure-preserving artefact like a
+  crew note does not stale it.)
+- **Round 10 was a red team, not a feature.** Six defects in
+  the R1–R9 system were found by adversarial probing and
+  fixed (severity/ETR head rewinds, the closure act's missing
+  role pack and future-dated restorations, storm overlap at
+  the extension door and by backdating); three design-level
+  findings are open in `docs/red-team.md` — a storm declared
+  after a handover does not stale it (the storm section is
+  the fold at the handover's own moment), correlation
+  chaining grows an incident's span by the pack's stated
+  nearest-member rule, and the R4 closure surface is not
+  itself restoration-gated (hardened this round; gating it
+  is a product decision).
 - **The AgentCore Policy pack is Round 11.** In R1, Law 1 (no
   control) is enforced by the tool catalogue's construction and
   the registry scan; the Cedar policy pack at the Gateway is the
