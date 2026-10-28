@@ -11,11 +11,14 @@ from datetime import datetime, timezone
 
 from grid_triage.agent import IncidentAssembler, model_for_profile
 from grid_triage.cause import CauseService
+from grid_triage.closure import ClosureService
 from grid_triage.config import Settings
+from grid_triage.etr import EtrService
 from grid_triage.evidence import EvidenceChain
 from grid_triage.memory import LocalMemoryDouble, MemoryService
 from grid_triage.object_store import LocalObjectStore
 from grid_triage.packs import EvidencePackService
+from grid_triage.roster import RosterView, load_roster_file
 from grid_triage.seed import ReferenceFeedAdapter
 from grid_triage.services import CorrelationService, IngestService
 from grid_triage.severity import SeverityService
@@ -52,12 +55,18 @@ class Services:
         self.packs = EvidencePackService(
             self.store, self.chain, self.cause, self.severity, self.memory
         )
+        # The crew roster: a versioned artefact loaded from data,
+        # like the topology (Round 4).
+        self.roster = RosterView(load_roster_file(settings.roster_version))
+        self.etr = EtrService(self.store, self.chain, self.cause, self.roster)
+        self.closure = ClosureService(self.store, self.chain, self.memory)
         self.assembler = IncidentAssembler(
             self.store,
             self.chain,
             model_for_profile(settings.model_profile),
             cause=self.cause,
             memory=self.memory,
+            etr=self.etr,
         )
 
 

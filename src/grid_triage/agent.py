@@ -41,6 +41,7 @@ from grid_triage.severity import SeverityService
 
 _BAND_TOKEN = re.compile(r"\bSEV-[1-4]\b|\bUNRATED\b")
 _CLASS_TOKENS = [c for c in CAUSE_PACK["classes"]]
+_TIME_TOKEN = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}")
 
 
 class ModelNotConfigured(RuntimeError):
@@ -74,6 +75,52 @@ class PriorAttributionRefusal(RuntimeError):
     def __init__(self, problems: list[str]):
         self.problems = problems
         super().__init__("prior misattribution: " + "; ".join(problems))
+
+
+class EtrBasisRefusal(RuntimeError):
+    """Raised when a proposed brief states a restoration time
+    without the computed estimate's basis label attached, states
+    a time that is not the estimate's, or states any restoration
+    time for an estimate that is not computable (Round 4, Law 4):
+    an estimate is published with its basis, or not at all."""
+
+    def __init__(self, problems: list[str]):
+        self.problems = problems
+        super().__init__("etr basis violation: " + "; ".join(problems))
+
+
+def etr_problems(statements: list[BriefStatement], estimate) -> list[str]:
+    """Check restoration-time statements against the estimate of
+    record. A statement is in scope when it speaks of restoration
+    and names a clock time; such a statement is allowed only when
+    the estimate is computed, the statement carries the estimate's
+    basis label, and the time it states is the estimate's time."""
+    problems: list[str] = []
+    if estimate is None:
+        return problems
+    for stmt in statements:
+        if "restor" not in stmt.text.lower():
+            continue
+        if not _TIME_TOKEN.search(stmt.text):
+            continue
+        if estimate.status != "computed":
+            problems.append(
+                "brief states a restoration time but the estimate is "
+                f"not_computable (missing: {', '.join(estimate.missing_inputs)}):"
+                f" {stmt.text[:40]!r}"
+            )
+        elif estimate.basis not in stmt.text:
+            problems.append(
+                "brief states a restoration time without its basis label "
+                f"({estimate.basis}): {stmt.text[:40]!r}"
+            )
+        elif estimate.estimated_restored_at.isoformat() not in stmt.text:
+            problems.append(
+                "brief states a restoration time that is not the computed "
+                f"estimate's ({estimate.estimated_restored_at.isoformat()}):"
+                f" {stmt.text[:40]!r}"
+            )
+    return problems
 
 
 def prior_problems(statements: list[BriefStatement], memory) -> list[str]:
@@ -249,6 +296,46 @@ class OfflineComposer:
                     ],
                 )
             )
+        etr = next((f for f in facts if f["field"] == "_etr"), None)
+        if etr is not None:
+            item_id = etr["item_id"]
+            if etr["status"] == "computed":
+                components = {c["name"]: c["minutes"] for c in etr["components"]}
+                statements.append(
+                    BriefStatement(
+                        text=(
+                            f"Estimated restoration {etr['estimated_restored_at']} "
+                            f"(basis: {etr['basis']}): crew wait "
+                            f"{components['crew_wait']} minutes, travel "
+                            f"{components['travel_access']} minutes, repair "
+                            f"{components['base_repair']} minutes — "
+                            f"{etr['total_minutes']} minutes from the estimate time."
+                        ),
+                        citations=[
+                            Citation(
+                                evidence_item_id=item_id,
+                                field="estimated_restored_at",
+                            ),
+                            Citation(evidence_item_id=item_id, field="basis"),
+                            Citation(evidence_item_id=item_id, field="total_minutes"),
+                        ],
+                    )
+                )
+            else:
+                statements.append(
+                    BriefStatement(
+                        text=(
+                            "No restoration estimate: not computable from "
+                            "rates — missing "
+                            + ", ".join(etr["missing_inputs"])
+                            + "."
+                        ),
+                        citations=[
+                            Citation(evidence_item_id=item_id, field="status"),
+                            Citation(evidence_item_id=item_id, field="missing_inputs"),
+                        ],
+                    )
+                )
         severity = next((f for f in facts if f["field"] == "_severity"), None)
         if severity is not None:
             item_id = severity["item_id"]
@@ -336,15 +423,20 @@ class IncidentAssembler:
     facts: the model may quote a prior only as recorded — its
     citations resolve against the memory records themselves, and
     a class attributed to a prior that the record does not state
-    refuses the brief."""
+    refuses the brief. From Round 4 the ETR engine estimates
+    restoration before the model is consulted: the model receives
+    the estimate's time only together with its basis label, and a
+    brief stating a restoration time without that basis — or any
+    time for a not-computable estimate — is refused."""
 
     def __init__(self, store, chain: EvidenceChain, model: ModelPort,
-                 cause: CauseService | None = None, memory=None):
+                 cause: CauseService | None = None, memory=None, etr=None):
         self.store = store
         self.chain = chain
         self.model = model
         self.cause = cause or CauseService(store, chain)
         self.memory = memory  # a MemoryService, or None
+        self.etr = etr  # an EtrService, or None
         self.resolver = CitationResolver(
             chain, memory.memory if memory is not None else None
         )
@@ -413,6 +505,51 @@ class IncidentAssembler:
             )
         return facts
 
+    def read_etr_facts(self, estimate) -> list[dict[str, Any]]:
+        """The current ETR estimate as model facts, citing its own
+        evidence item on the incident's chain. A computed estimate
+        hands the model its restored time only together with the
+        basis label; a not-computable estimate hands it the named
+        missing inputs and no time at all."""
+        item_id = f"EV-{estimate.estimate_id}"
+        facts: list[dict[str, Any]] = [
+            {
+                "item_id": item_id,
+                "field": "_etr",
+                "status": estimate.status,
+                "basis": estimate.basis,
+                "estimated_restored_at": (
+                    estimate.estimated_restored_at.isoformat()
+                    if estimate.estimated_restored_at
+                    else None
+                ),
+                "total_minutes": estimate.total_minutes,
+                "components": estimate.components,
+                "missing_inputs": estimate.missing_inputs,
+            },
+            {"item_id": item_id, "field": "status", "value": estimate.status},
+            {
+                "item_id": item_id,
+                "field": "missing_inputs",
+                "value": estimate.missing_inputs,
+            },
+        ]
+        if estimate.status == "computed":
+            facts += [
+                {
+                    "item_id": item_id,
+                    "field": "estimated_restored_at",
+                    "value": estimate.estimated_restored_at.isoformat(),
+                },
+                {"item_id": item_id, "field": "basis", "value": estimate.basis},
+                {
+                    "item_id": item_id,
+                    "field": "total_minutes",
+                    "value": estimate.total_minutes,
+                },
+            ]
+        return facts
+
     def read_prior_facts(self, hits) -> list[dict[str, Any]]:
         """Retrieved priors as model facts. The citable item is the
         memory record itself, by id — the resolver checks fields
@@ -455,8 +592,11 @@ class IncidentAssembler:
             raise KeyError(f"no such incident: {incident_id}")
         self.cause.classify(incident_id, now)
         assessment = self.severity.assess(incident_id, now)
+        estimate = self.etr.estimate(incident_id, now) if self.etr else None
         facts = self.read_incident_facts(incident_id)
         facts += self.read_severity_facts(assessment)
+        if estimate is not None:
+            facts += self.read_etr_facts(estimate)
         if self.memory is not None:
             hits = self.memory.retrieve_for_incident(incident_id, now)
             facts += self.read_prior_facts(hits)
@@ -472,6 +612,9 @@ class IncidentAssembler:
         )
         if misattributions:
             raise PriorAttributionRefusal(misattributions)
+        basis_violations = etr_problems(statements, estimate)
+        if basis_violations:
+            raise EtrBasisRefusal(basis_violations)
         brief = IncidentBrief(
             brief_id=f"BRIEF-{incident_id}-{len(self.store.list_briefs(incident_id)) + 1:03d}",
             incident_id=incident_id,
