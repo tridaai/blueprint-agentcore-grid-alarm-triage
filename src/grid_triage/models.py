@@ -199,6 +199,89 @@ class EvidencePack(BaseModel):
     manifest_hash: str
 
 
+class EtrEstimate(BaseModel):
+    """One ETR (estimated time of restoration) computation for one
+    incident (Round 4, Law 4).
+
+    Computed in code from stated inputs — the classified cause,
+    the anchor device, a versioned repair-rate pack and the crew
+    roster — and content-addressed like the severity assessments:
+    a recomputation supersedes by link, never edits. When every
+    input exists the estimate's ``basis`` is
+    ``computed_from_rates`` and its components (crew wait, travel,
+    base repair) are recorded line by line. When an input is
+    missing the estimate is ``not_computable`` and names the
+    input in ``missing_inputs``: the system never emits a guessed
+    clock time, so a not-computable estimate carries no restored
+    time and no total.
+    """
+
+    estimate_id: str
+    incident_id: str
+    as_of: datetime
+    rate_pack_version: str
+    roster_version: str
+    classification_id: str | None = None
+    supersedes: str | None = None
+    status: str  # "computed" | "not_computable"
+    basis: str | None = None  # "computed_from_rates" when computed
+    inputs: dict = Field(default_factory=dict)
+    components: list[dict] = Field(default_factory=list)
+    total_minutes: int | None = None
+    estimated_restored_at: datetime | None = None
+    estimated_duration_minutes: float | None = None
+    missing_inputs: list[str] = Field(default_factory=list)
+    revision: dict | None = None
+
+
+class IncidentClosure(BaseModel):
+    """A named operator's closure act for one incident (Round 4).
+
+    The minimal act the ETR accuracy ledger and the memory port
+    rest on: who closed the incident, in what role, when supply
+    was actually restored, and the resolution facts as recorded.
+    The full restoration-confirmation workflow is Round 8; this
+    act is deliberately only the recorded facts. A closure is
+    written once — an incident has at most one.
+    """
+
+    closure_id: str
+    incident_id: str
+    closed_by: str
+    role: str
+    restored_at: datetime
+    resolution_summary: str
+    recorded_at: datetime
+
+
+class EtrOutcome(BaseModel):
+    """One closed incident's ETR track record (Round 4).
+
+    At closure, the actual duration (restoration minus the anchor
+    alarm) is compared with the estimate of record — the latest
+    computed estimate whose ``as_of`` does not postdate the
+    restoration. The signed error is actual minus estimated:
+    positive means restoration ran late against the estimate.
+    When no computed estimate exists the outcome still records
+    the actual duration with status ``no_computed_estimate`` and
+    no error figures: an unestimated incident is a gap in the
+    track record, never silently dropped and never back-filled
+    with a retro-estimate.
+    """
+
+    outcome_id: str
+    incident_id: str
+    closure_id: str
+    estimate_id: str | None = None
+    cause_class: str
+    status: str  # "compared" | "no_computed_estimate"
+    estimated_duration_minutes: float | None = None
+    actual_duration_minutes: float
+    signed_error_minutes: float | None = None
+    absolute_error_minutes: float | None = None
+    recorded_at: datetime
+
+
 class Notification(BaseModel):
     """A recorded notification (Law: notify is a tool shape). In R1
     the notification is recorded against the incident; no real

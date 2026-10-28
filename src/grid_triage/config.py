@@ -26,6 +26,7 @@ class Settings:
     object_store_dir: str = "./data/objects"
 
     topology_version: str = "v1"
+    roster_version: str = "v1"
     runtime_port: int = 8080
 
     @classmethod
@@ -38,5 +39,6 @@ class Settings:
             database_url=os.environ.get("DATABASE_URL", ""),
             object_store_dir=os.environ.get("OBJECT_STORE_DIR", "./data/objects"),
             topology_version=os.environ.get("TOPOLOGY_VERSION", "v1"),
+            roster_version=os.environ.get("ROSTER_VERSION", "v1"),
             runtime_port=int(os.environ.get("RUNTIME_PORT", "8080")),
         )

@@ -24,10 +24,13 @@ from grid_triage.migrations import apply_migrations
 from grid_triage.models import (
     Alarm,
     CauseClassification,
+    EtrEstimate,
+    EtrOutcome,
     EvidenceItem,
     EvidencePack,
     Incident,
     IncidentBrief,
+    IncidentClosure,
     IncidentMembership,
     IncidentStatus,
     MemoryRecord,
@@ -87,6 +90,18 @@ class Store(Protocol):
     def add_evidence_pack(self, pack: EvidencePack) -> None: ...
     def get_evidence_pack(self, pack_id: str) -> EvidencePack | None: ...
     def list_evidence_packs(self, incident_id: str) -> list[EvidencePack]: ...
+    # ETR (Round 4: estimates append-only, superseding by link;
+    # one closure act per incident; outcomes feed the ledger)
+    def add_etr_estimate(self, estimate: EtrEstimate) -> None: ...
+    def get_etr_estimate(self, estimate_id: str) -> EtrEstimate | None: ...
+    def list_etr_estimates(self, incident_id: str) -> list[EtrEstimate]: ...
+    def add_incident_closure(self, closure: IncidentClosure) -> None: ...
+    def get_incident_closure(self, incident_id: str) -> IncidentClosure | None: ...
+    def list_incident_closures(self) -> list[IncidentClosure]: ...
+    def add_etr_outcome(self, outcome: EtrOutcome) -> None: ...
+    def list_etr_outcomes(
+        self, incident_id: str | None = None
+    ) -> list[EtrOutcome]: ...
     # topology index
     def load_topology(self, payload: dict, loaded_at: datetime) -> None: ...
     def get_topology_payload(self, version: str) -> dict | None: ...
@@ -540,6 +555,93 @@ class SqlStore:
             fetch="all",
         )
         return [EvidencePack.model_validate(json.loads(r[0])) for r in rows]
+
+    # -- ETR estimates, closures, outcomes (Round 4) -------------------
+    def add_etr_estimate(self, estimate: EtrEstimate) -> None:
+        row = self._run(
+            "SELECT COALESCE(MAX(estimated_seq), 0) FROM etr_estimates", fetch="one"
+        )
+        seq = int(row[0]) + 1
+        self._run(
+            "INSERT INTO etr_estimates (estimate_id, incident_id, estimated_seq, payload)"
+            " VALUES (?,?,?,?)",
+            (
+                estimate.estimate_id,
+                estimate.incident_id,
+                seq,
+                estimate.model_dump_json(),
+            ),
+        )
+
+    def get_etr_estimate(self, estimate_id: str) -> EtrEstimate | None:
+        row = self._run(
+            "SELECT payload FROM etr_estimates WHERE estimate_id = ?",
+            (estimate_id,),
+            fetch="one",
+        )
+        return EtrEstimate.model_validate(json.loads(row[0])) if row else None
+
+    def list_etr_estimates(self, incident_id: str) -> list[EtrEstimate]:
+        rows = self._run(
+            "SELECT payload FROM etr_estimates WHERE incident_id = ?"
+            " ORDER BY estimated_seq",
+            (incident_id,),
+            fetch="all",
+        )
+        return [EtrEstimate.model_validate(json.loads(r[0])) for r in rows]
+
+    def add_incident_closure(self, closure: IncidentClosure) -> None:
+        self._run(
+            "INSERT INTO incident_closures (closure_id, incident_id, payload)"
+            " VALUES (?,?,?)",
+            (
+                closure.closure_id,
+                closure.incident_id,
+                closure.model_dump_json(),
+            ),
+        )
+
+    def get_incident_closure(self, incident_id: str) -> IncidentClosure | None:
+        row = self._run(
+            "SELECT payload FROM incident_closures WHERE incident_id = ?",
+            (incident_id,),
+            fetch="one",
+        )
+        return IncidentClosure.model_validate(json.loads(row[0])) if row else None
+
+    def list_incident_closures(self) -> list[IncidentClosure]:
+        rows = self._run(
+            "SELECT payload FROM incident_closures ORDER BY incident_id", fetch="all"
+        )
+        return [IncidentClosure.model_validate(json.loads(r[0])) for r in rows]
+
+    def add_etr_outcome(self, outcome: EtrOutcome) -> None:
+        self._run(
+            "INSERT INTO etr_outcomes (outcome_id, incident_id, closure_id, payload)"
+            " VALUES (?,?,?,?)",
+            (
+                outcome.outcome_id,
+                outcome.incident_id,
+                outcome.closure_id,
+                outcome.model_dump_json(),
+            ),
+        )
+
+    def list_etr_outcomes(
+        self, incident_id: str | None = None
+    ) -> list[EtrOutcome]:
+        if incident_id is None:
+            rows = self._run(
+                "SELECT payload FROM etr_outcomes ORDER BY outcome_id", fetch="all"
+            )
+        else:
+            rows = self._run(
+                "SELECT payload FROM etr_outcomes WHERE incident_id = ?"
+                " ORDER BY outcome_id",
+                (incident_id,),
+                fetch="all",
+            )
+        return [EtrOutcome.model_validate(json.loads(r[0])) for r in rows]
 
     # -- topology index ------------------------------------------------
     def load_topology(self, payload: dict, loaded_at: datetime) -> None:
