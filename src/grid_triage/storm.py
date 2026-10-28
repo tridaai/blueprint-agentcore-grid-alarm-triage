@@ -253,6 +253,34 @@ class StormService:
             }
         return {"mode": "normal", "feeder_id": feeder_id, "at": at.isoformat()}
 
+    def active_windows(self, at: datetime) -> list[dict]:
+        """Every storm window open at ``at``, folded from the
+        acts: the declaration that opened it, the head act that
+        currently states its scope, and that scope. The
+        territory-level read the operations board and the shift
+        handover assemble from (Round 9) — the same fold
+        :meth:`state_at` reads per feeder, never a second
+        mechanism."""
+        windows: list[dict] = []
+        for window in self._windows():
+            head = self._fold_at(window, at)
+            if head is None:
+                continue
+            declare = window["declare"]
+            windows.append(
+                {
+                    "declaration_id": declare.declaration_id,
+                    "head_act_id": head.declaration_id,
+                    "declared_by": declare.declared_by,
+                    "declared_at": declare.declared_at.isoformat(),
+                    "pack_version": self.pack["version"],
+                    "feeders": list(head.feeders),
+                    "region": head.region,
+                    "reason": head.reason,
+                }
+            )
+        return windows
+
     def stamp_for(self, feeder_id: str, at: datetime) -> dict:
         """The incident-stamp fields for an incident arising on
         ``feeder_id`` at ``at`` — the mode in force, and under

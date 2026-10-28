@@ -682,6 +682,51 @@ class StormReview(BaseModel):
     computed_at: datetime
 
 
+class ShiftHandover(BaseModel):
+    """One shift handover artefact (Round 9).
+
+    At a named operator's handover act, the state of the control
+    room is assembled **only from artefacts of record** — open
+    incidents with their severity and mode stamps, the approvals
+    still pending a named decision, the open work orders, the
+    restorations not yet confirmed complete, the storm state as
+    the declaration fold gives it at handover time, and the ETR
+    accuracy snapshot. ``sections`` is that whole computation;
+    ``record_hash`` is the hash over it, and it is the hash the
+    acceptance act binds. Handovers are insert-only and
+    content-addressed: assembling over a moved record produces
+    a new artefact whose ``supersedes`` links to this one —
+    this one is never edited, and its drift from the live
+    record is exactly what its verifier names.
+    """
+
+    handover_id: str
+    pack_version: str
+    handed_over_by: str
+    role: str
+    handed_over_at: datetime
+    supersedes: str | None = None
+    sections: dict = Field(default_factory=dict)
+    record_hash: str
+
+
+class HandoverAcceptance(BaseModel):
+    """The incoming operator's acceptance of one handover
+    (Round 9). A second named act, bound to the handover's
+    ``record_hash``: the acceptance says "the record I am
+    taking over is the record this hash covers". Acceptance of
+    a handover whose record has since moved is refused — the
+    drift is named, and the way forward is a fresh handover.
+    Insert-only, like every act in this system."""
+
+    acceptance_id: str
+    handover_id: str
+    record_hash: str
+    accepted_by: str
+    role: str
+    accepted_at: datetime
+
+
 class Notification(BaseModel):
     """A recorded notification (Law: notify is a tool shape). In R1
     the notification is recorded against the incident; no real

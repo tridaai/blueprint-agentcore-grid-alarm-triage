@@ -29,6 +29,7 @@ from grid_triage.models import (
     EvidenceItem,
     EvidencePack,
     FieldUpdate,
+    HandoverAcceptance,
     Incident,
     IncidentBrief,
     IncidentCloseAct,
@@ -44,6 +45,7 @@ from grid_triage.models import (
     RestorationSignal,
     SeverityAcknowledgement,
     SeverityAssessment,
+    ShiftHandover,
     StormDeclaration,
     StormReview,
     TopologyDeclaration,
@@ -186,6 +188,20 @@ class Store(Protocol):
     def list_storm_reviews(
         self, declaration_id: str | None = None
     ) -> list[StormReview]: ...
+    # shift handovers and their acceptance acts (Round 9:
+    # insert-only artefacts and acts — the port exposes no
+    # update and no delete for either)
+    def add_shift_handover(self, handover: ShiftHandover) -> None: ...
+    def get_shift_handover(
+        self, handover_id: str
+    ) -> ShiftHandover | None: ...
+    def list_shift_handovers(self) -> list[ShiftHandover]: ...
+    def add_handover_acceptance(
+        self, acceptance: HandoverAcceptance
+    ) -> None: ...
+    def list_handover_acceptances(
+        self, handover_id: str | None = None
+    ) -> list[HandoverAcceptance]: ...
     # topology index
     def load_topology(self, payload: dict, loaded_at: datetime) -> None: ...
     def get_topology_payload(self, version: str) -> dict | None: ...
@@ -1255,3 +1271,68 @@ class SqlStore:
                 fetch="all",
             )
         return [StormReview.model_validate(json.loads(r[0])) for r in rows]
+
+    # -- shift handovers and acceptance acts (Round 9) -------------
+    def add_shift_handover(self, handover: ShiftHandover) -> None:
+        self._run(
+            "INSERT INTO shift_handovers"
+            " (handover_id, handed_over_by, act_seq, payload)"
+            " VALUES (?,?,?,?)",
+            (
+                handover.handover_id,
+                handover.handed_over_by,
+                self._next_seq("shift_handovers"),
+                handover.model_dump_json(),
+            ),
+        )
+
+    def get_shift_handover(
+        self, handover_id: str
+    ) -> ShiftHandover | None:
+        row = self._run(
+            "SELECT payload FROM shift_handovers WHERE handover_id = ?",
+            (handover_id,),
+            fetch="one",
+        )
+        return ShiftHandover.model_validate(json.loads(row[0])) if row else None
+
+    def list_shift_handovers(self) -> list[ShiftHandover]:
+        rows = self._run(
+            "SELECT payload FROM shift_handovers ORDER BY act_seq",
+            fetch="all",
+        )
+        return [ShiftHandover.model_validate(json.loads(r[0])) for r in rows]
+
+    def add_handover_acceptance(
+        self, acceptance: HandoverAcceptance
+    ) -> None:
+        self._run(
+            "INSERT INTO handover_acceptances"
+            " (acceptance_id, handover_id, act_seq, payload)"
+            " VALUES (?,?,?,?)",
+            (
+                acceptance.acceptance_id,
+                acceptance.handover_id,
+                self._next_seq("handover_acceptances"),
+                acceptance.model_dump_json(),
+            ),
+        )
+
+    def list_handover_acceptances(
+        self, handover_id: str | None = None
+    ) -> list[HandoverAcceptance]:
+        if handover_id is None:
+            rows = self._run(
+                "SELECT payload FROM handover_acceptances ORDER BY act_seq",
+                fetch="all",
+            )
+        else:
+            rows = self._run(
+                "SELECT payload FROM handover_acceptances"
+                " WHERE handover_id = ? ORDER BY act_seq",
+                (handover_id,),
+                fetch="all",
+            )
+        return [
+            HandoverAcceptance.model_validate(json.loads(r[0])) for r in rows
+        ]
