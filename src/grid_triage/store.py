@@ -44,6 +44,8 @@ from grid_triage.models import (
     RestorationSignal,
     SeverityAcknowledgement,
     SeverityAssessment,
+    StormDeclaration,
+    StormReview,
     TopologyDeclaration,
     WorkOrder,
     WorkOrderAssignment,
@@ -174,6 +176,16 @@ class Store(Protocol):
     def list_post_close_contradictions(
         self,
     ) -> list[PostCloseContradiction]: ...
+    # storm declarations and reviews (Round 8: the declaration
+    # acts and the post-storm reviews are insert-only — the port
+    # exposes no update and no delete for either)
+    def add_storm_declaration(self, declaration: StormDeclaration) -> None: ...
+    def list_storm_declarations(self) -> list[StormDeclaration]: ...
+    def add_storm_review(self, review: StormReview) -> None: ...
+    def get_storm_review(self, review_id: str) -> StormReview | None: ...
+    def list_storm_reviews(
+        self, declaration_id: str | None = None
+    ) -> list[StormReview]: ...
     # topology index
     def load_topology(self, payload: dict, loaded_at: datetime) -> None: ...
     def get_topology_payload(self, version: str) -> dict | None: ...
@@ -186,7 +198,8 @@ _ALARM_COLS = (
 )
 _INCIDENT_COLS = (
     "incident_id, feeder_id, substation_id, topology_version,"
-    " correlation_pack_version, anchor_alarm_id, status, created_at"
+    " correlation_pack_version, anchor_alarm_id, status, created_at,"
+    " operating_mode, storm_pack_version, storm_declaration_id"
 )
 _EVIDENCE_COLS = (
     "item_id, incident_id, kind, object_key, payload_sha256,"
@@ -208,6 +221,9 @@ def _incident_from_row(row) -> Incident:
         anchor_alarm_id=row[5],
         status=IncidentStatus(row[6]),
         created_at=datetime.fromisoformat(row[7]),
+        operating_mode=row[8],
+        storm_pack_version=row[9],
+        storm_declaration_id=row[10],
     )
 
 
@@ -328,7 +344,7 @@ class SqlStore:
     # -- incidents ---------------------------------------------------
     def add_incident(self, incident: Incident) -> None:
         self._run(
-            f"INSERT INTO incidents ({_INCIDENT_COLS}) VALUES (?,?,?,?,?,?,?,?)",
+            f"INSERT INTO incidents ({_INCIDENT_COLS}) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (
                 incident.incident_id,
                 incident.feeder_id,
@@ -338,6 +354,9 @@ class SqlStore:
                 incident.anchor_alarm_id,
                 incident.status.value,
                 incident.created_at.isoformat(),
+                incident.operating_mode,
+                incident.storm_pack_version,
+                incident.storm_declaration_id,
             ),
         )
 
@@ -1167,3 +1186,72 @@ class SqlStore:
             }
             for r in rows
         ]
+
+    # -- storm declarations and reviews (Round 8) --------------------
+    def add_storm_declaration(self, declaration: StormDeclaration) -> None:
+        row = self._run(
+            "SELECT COALESCE(MAX(act_seq), 0) FROM storm_declarations",
+            fetch="one",
+        )
+        seq = int(row[0]) + 1
+        self._run(
+            "INSERT INTO storm_declarations"
+            " (declaration_id, kind, opens_declaration_id, act_seq, payload)"
+            " VALUES (?,?,?,?,?)",
+            (
+                declaration.declaration_id,
+                declaration.kind,
+                declaration.opens_declaration_id,
+                seq,
+                declaration.model_dump_json(),
+            ),
+        )
+
+    def list_storm_declarations(self) -> list[StormDeclaration]:
+        rows = self._run(
+            "SELECT payload FROM storm_declarations ORDER BY act_seq",
+            fetch="all",
+        )
+        return [StormDeclaration.model_validate(json.loads(r[0])) for r in rows]
+
+    def add_storm_review(self, review: StormReview) -> None:
+        row = self._run(
+            "SELECT COALESCE(MAX(act_seq), 0) FROM storm_reviews", fetch="one"
+        )
+        seq = int(row[0]) + 1
+        self._run(
+            "INSERT INTO storm_reviews"
+            " (review_id, declaration_id, act_seq, payload)"
+            " VALUES (?,?,?,?)",
+            (
+                review.review_id,
+                review.declaration_id,
+                seq,
+                review.model_dump_json(),
+            ),
+        )
+
+    def get_storm_review(self, review_id: str) -> StormReview | None:
+        row = self._run(
+            "SELECT payload FROM storm_reviews WHERE review_id = ?",
+            (review_id,),
+            fetch="one",
+        )
+        return StormReview.model_validate(json.loads(row[0])) if row else None
+
+    def list_storm_reviews(
+        self, declaration_id: str | None = None
+    ) -> list[StormReview]:
+        if declaration_id is None:
+            rows = self._run(
+                "SELECT payload FROM storm_reviews ORDER BY act_seq",
+                fetch="all",
+            )
+        else:
+            rows = self._run(
+                "SELECT payload FROM storm_reviews WHERE declaration_id = ?"
+                " ORDER BY act_seq",
+                (declaration_id,),
+                fetch="all",
+            )
+        return [StormReview.model_validate(json.loads(r[0])) for r in rows]

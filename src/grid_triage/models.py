@@ -41,6 +41,16 @@ class Incident(BaseModel):
     anchor_alarm_id: str
     status: IncidentStatus = IncidentStatus.OPEN
     created_at: datetime
+    # Round 8 (Law 8): the operating mode in force when this
+    # incident was correlated, stamped on its face. ``normal``
+    # unless a storm declaration covered the incident's feeder at
+    # its anchor alarm's time, in which case the stamp names the
+    # storm pack version and the declaration act that put the
+    # state there. The stamp is written once, at creation —
+    # standing a storm down never rewrites it.
+    operating_mode: str = "normal"  # "normal" | "storm"
+    storm_pack_version: str | None = None
+    storm_declaration_id: str | None = None
 
 
 class IncidentMembership(BaseModel):
@@ -221,6 +231,14 @@ class EtrEstimate(BaseModel):
     as_of: datetime
     rate_pack_version: str
     roster_version: str
+    # Round 8: the operating mode the estimate was computed
+    # under. A storm estimate carries the storm pack's stated
+    # adjustment as its own component line and names the pack
+    # version and declaration it rests on — the label travels
+    # with the estimate, never just with the incident.
+    operating_mode: str = "normal"  # "normal" | "storm"
+    storm_pack_version: str | None = None
+    storm_declaration_id: str | None = None
     classification_id: str | None = None
     supersedes: str | None = None
     status: str  # "computed" | "not_computable"
@@ -274,6 +292,12 @@ class EtrOutcome(BaseModel):
     closure_id: str
     estimate_id: str | None = None
     cause_class: str
+    # Round 8: the operating mode of the incident this outcome
+    # closes, copied from the incident's stamp at closure time —
+    # the accuracy ledger separates storm performance from
+    # normal performance by this field, never by inference.
+    operating_mode: str = "normal"  # "normal" | "storm"
+    storm_declaration_id: str | None = None
     status: str  # "compared" | "no_computed_estimate"
     estimated_duration_minutes: float | None = None
     actual_duration_minutes: float
@@ -598,6 +622,63 @@ class PostCloseContradiction(BaseModel):
     device_id: str
     closure_id: str
     recorded_at: datetime
+
+
+class StormDeclaration(BaseModel):
+    """One storm-mode act (Round 8, Law 8).
+
+    Storm mode exists only as acts: ``declare`` opens a storm
+    window, ``extend`` widens or re-states its scope, and
+    ``stand_down`` closes it. Each act names its operator, role,
+    stated reason and affected scope (``feeders``; empty means
+    the whole territory, ``region`` a free label the operator
+    states), and links to the window it belongs to
+    (``opens_declaration_id`` — the declare act's own id on the
+    declare itself) and to the act it follows (``supersedes``).
+    The acts are insert-only and content-addressed: the state at
+    any moment is the fold of these acts, and no act is ever
+    edited or deleted. Alarm volume alone never creates one —
+    there is no automatic entry into storm mode.
+    """
+
+    declaration_id: str
+    kind: str  # "declare" | "extend" | "stand_down"
+    pack_version: str
+    declared_by: str
+    role: str
+    reason: str
+    feeders: list[str] = Field(default_factory=list)
+    region: str | None = None
+    declared_at: datetime
+    opens_declaration_id: str | None = None
+    supersedes: str | None = None
+
+
+class StormReview(BaseModel):
+    """The post-storm review of one storm window (Round 8).
+
+    Computed only after the window's stand-down, assembled only
+    from artefacts of record: the incidents stamped with the
+    declaration, their current severity assessments and their
+    ETR outcomes. ``figures`` is the whole computation — incident
+    counts by band, closures, and the storm-only ETR accuracy —
+    so the review re-performs exactly from the store, and a
+    recomputation over moved artefacts supersedes by link
+    instead of editing this one.
+    """
+
+    review_id: str
+    declaration_id: str
+    pack_version: str
+    supersedes: str | None = None
+    declared_at: datetime
+    stood_down_at: datetime
+    feeders: list[str] = Field(default_factory=list)
+    region: str | None = None
+    incident_ids: list[str] = Field(default_factory=list)
+    figures: dict = Field(default_factory=dict)
+    computed_by: str
+    computed_at: datetime
 
 
 class Notification(BaseModel):
