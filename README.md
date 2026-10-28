@@ -147,6 +147,40 @@ programme.
   priors / pack surfaces at parity across the operations API, the
   Runtime invocation handler and the CLI.
 
+## What Round 4 builds
+
+- **The ETR engine** (`grid_triage/etr.py`): restoration estimates
+  computed in code from a stated formula — crew wait (next
+  available qualified crew from the roster) + travel minutes
+  (rate pack, per substation pair) + repair base minutes (rate
+  pack, per cause class × device type). The rate pack is a
+  versioned artefact, as is the **crew roster**
+  (`data/roster/v1.json`: crews, skills, shift windows, current
+  assignments), and every estimate is content-addressed, pinned
+  to (incident, rate pack version, roster version, as_of), with
+  each component a recorded line.
+- **Basis labelling (the law)**: every ETR carries its basis —
+  `computed_from_rates` when every input exists. When an input is
+  missing (unknown cause class, no qualified crew on roster, no
+  base rate, no travel pair), the ETR is `not_computable` naming
+  the input, and the system never emits a guessed clock time. The
+  brief verifier enforces it: a brief stating a restoration time
+  without the basis label — or quoting a time that is not the
+  estimate's own — is refused whole.
+- **Revisions and the accuracy ledger**: re-estimating as facts
+  land supersedes by link, with the total delta and the changed
+  inputs named; an identical recomputation is a no-op. A minimal
+  named **closure act** records the actual restored time (and
+  feeds the Round 3 memory record); the closure compares the
+  actual duration against the estimate of record and the
+  per-cause-class accuracy ledger is derived from those recorded
+  outcomes — the ETR track record a brief may quote is only the
+  one the ledger recorded.
+- Migration 0004 (both dialects), and ETR / roster / closure /
+  accuracy surfaces at parity across the operations API, the
+  Runtime invocation handler and the CLI. The demo now walks the
+  flood through estimate → closure → ledger.
+
 ## Quick start
 
 ```bash
@@ -173,10 +207,13 @@ What is built and what is not, plainly:
   has called it. The double exists so the record shape, the
   insert-only discipline and the retrieval arithmetic are built
   and graded offline.
-- **ETR is Round 4, work orders Round 5, the operator approval
-  gate Round 6, storm mode Round 9.** The agent assembles briefs
-  and seals packs and stops; nobody is dispatched and nothing is
-  approved.
+- **ETR is computed (Round 4)** from a versioned rate pack and a
+  versioned roster, and every ETR carries its basis —
+  `computed_from_rates`, or `not_computable` naming the missing
+  input; closures grade the estimates into an accuracy ledger.
+  **Work orders are Round 5, the operator approval gate Round 6,
+  storm mode Round 9.** The agent estimates, briefs and seals
+  packs and stops; nobody is dispatched and nothing is approved.
 - **The AgentCore Policy pack is Round 11.** In R1, Law 1 (no
   control) is enforced by the tool catalogue's construction and
   the registry scan; the Cedar policy pack at the Gateway is the
@@ -201,11 +238,13 @@ What is built and what is not, plainly:
 src/grid_triage/   models, topology, correlation, services (ingest),
                    evidence, store, agent, tools (Law 1 registry),
                    severity (R2), cause / memory / packs (R3),
+                   roster / etr / closure (R4),
                    runtime_app / runtime_main (AgentCore Runtime),
                    api, demo, cli, local_invoke, wiring, config
 data/topology/     versioned territory data (v1.json)
+data/roster/       versioned crew roster artefact (v1.json)
 migrations/        numbered SQL migrations, sqlite + postgres trees
-tests/             pytest suite (81 tests through R3)
+tests/             pytest suite (101 tests through R4)
 evals/             the eval gate (run_evals.py)
 docs/              architecture.md — the honest AgentCore mapping
 ```

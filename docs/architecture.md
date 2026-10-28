@@ -82,6 +82,9 @@ reporting), and a fabricated class would contaminate both.
 incident becomes a memory record assembled from its stored facts
 only — classification of record, current severity assessment,
 membership — plus the resolution summary recorded at close. The
+closure act itself is R4 (`grid_triage/closure.py`): named
+operator, restored timestamp, resolution summary, exactly one per
+incident. The
 port exposes put/get/list/retrieve and nothing else: no update,
 no delete, and the store refuses a re-insert under an existing
 record id with different content. Retrieval scores candidates
@@ -103,6 +106,31 @@ version, never by edit; verification recomputes every member from
 its source of record and the evidence chain whole, so an old pack
 still verifies after its members are superseded — the artefacts
 it points at are themselves immutable.
+
+**ETR is a stated formula over versioned packs (R4).** The
+estimate (`grid_triage/etr.py`) is a pure computation of the
+estimate-of-record inputs: the cause class of record, the anchor
+alarm's device kind, a **rate pack** (repair base minutes per
+cause × device-kind, travel minutes per substation pair) and a
+**roster artefact** (`data/roster/v1.json`: crews, skills, shift
+windows, current assignments). The crew chosen is the qualified
+crew minimising wait + travel; the total is wait + travel + base,
+each component a recorded line on a content-addressed estimate
+pinned to (incident, pack version, roster version, as_of).
+Estimates supersede by link with the revision delta and the
+changed inputs named, and an identical recomputation is a no-op.
+**The basis label is the law:** a computed estimate carries
+`computed_from_rates`; when any input is missing — unknown cause,
+no qualified crew, no base rate, no travel pair — the estimate is
+`not_computable` naming the input, and it carries no clock time at
+all. The brief verifier enforces the label at the sentence level:
+a restoration statement in a brief must quote the estimate's own
+time with its basis, or the brief is refused. **Closure closes
+the loop:** the closure act records the actual restored time, the
+outcome compares it to the estimate of record (latest estimate
+with as_of ≤ restored_at), and the accuracy ledger derives its
+per-class means from the recorded outcomes — the track record a
+brief may quote is the one the ledger recorded, nothing else.
 
 ## Stores
 
