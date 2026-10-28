@@ -31,17 +31,23 @@ from grid_triage.models import (
     FieldUpdate,
     Incident,
     IncidentBrief,
+    IncidentCloseAct,
     IncidentClosure,
     IncidentMembership,
     IncidentRevision,
+    IncidentSplit,
     IncidentStatus,
     MemoryRecord,
     Notification,
+    PostCloseContradiction,
+    RestorationConfirmation,
+    RestorationSignal,
     SeverityAcknowledgement,
     SeverityAssessment,
     TopologyDeclaration,
     WorkOrder,
     WorkOrderAssignment,
+    WorkOrderCompletion,
     WorkOrderDecision,
 )
 
@@ -134,6 +140,40 @@ class Store(Protocol):
     def add_incident_revision(self, revision: IncidentRevision) -> None: ...
     def get_incident_revision(self, revision_id: str) -> IncidentRevision | None: ...
     def list_incident_revisions(self) -> list[IncidentRevision]: ...
+    # restoration, gated close, completions, splits,
+    # contradictions (Round 7: signals and confirmations are
+    # insert-only artefacts; the close act, completion acts,
+    # split records and contradiction records are insert-only
+    # acts — the port exposes no update or delete for any of them)
+    def add_work_order_completion(
+        self, completion: WorkOrderCompletion
+    ) -> None: ...
+    def list_work_order_completions(
+        self, order_id: str | None = None
+    ) -> list[WorkOrderCompletion]: ...
+    def add_restoration_signal(self, signal: RestorationSignal) -> None: ...
+    def list_restoration_signals(
+        self, incident_id: str
+    ) -> list[RestorationSignal]: ...
+    def add_restoration_confirmation(
+        self, confirmation: RestorationConfirmation
+    ) -> None: ...
+    def list_restoration_confirmations(
+        self, incident_id: str
+    ) -> list[RestorationConfirmation]: ...
+    def add_incident_close_act(self, act: IncidentCloseAct) -> None: ...
+    def get_incident_close_act(
+        self, incident_id: str
+    ) -> IncidentCloseAct | None: ...
+    def add_incident_split(self, split: IncidentSplit) -> None: ...
+    def get_incident_split(self, split_id: str) -> IncidentSplit | None: ...
+    def list_incident_splits(self) -> list[IncidentSplit]: ...
+    def add_post_close_contradiction(
+        self, contradiction: PostCloseContradiction
+    ) -> None: ...
+    def list_post_close_contradictions(
+        self,
+    ) -> list[PostCloseContradiction]: ...
     # topology index
     def load_topology(self, payload: dict, loaded_at: datetime) -> None: ...
     def get_topology_payload(self, version: str) -> dict | None: ...
@@ -872,6 +912,176 @@ class SqlStore:
             "SELECT payload FROM incident_revisions ORDER BY act_seq", fetch="all"
         )
         return [IncidentRevision.model_validate(json.loads(r[0])) for r in rows]
+
+    # -- restoration, gated close, splits, contradictions (Round 7) --
+    def _next_seq(self, table: str) -> int:
+        row = self._run(
+            f"SELECT COALESCE(MAX(act_seq), 0) FROM {table}", fetch="one"
+        )
+        return int(row[0]) + 1
+
+    def add_work_order_completion(self, completion: WorkOrderCompletion) -> None:
+        self._run(
+            "INSERT INTO work_order_completions"
+            " (completion_id, order_id, incident_id, act_seq, payload)"
+            " VALUES (?,?,?,?,?)",
+            (
+                completion.completion_id,
+                completion.order_id,
+                completion.incident_id,
+                self._next_seq("work_order_completions"),
+                completion.model_dump_json(),
+            ),
+        )
+
+    def list_work_order_completions(
+        self, order_id: str | None = None
+    ) -> list[WorkOrderCompletion]:
+        if order_id is None:
+            rows = self._run(
+                "SELECT payload FROM work_order_completions ORDER BY act_seq",
+                fetch="all",
+            )
+        else:
+            rows = self._run(
+                "SELECT payload FROM work_order_completions"
+                " WHERE order_id = ? ORDER BY act_seq",
+                (order_id,),
+                fetch="all",
+            )
+        return [WorkOrderCompletion.model_validate(json.loads(r[0])) for r in rows]
+
+    def add_restoration_signal(self, signal: RestorationSignal) -> None:
+        self._run(
+            "INSERT INTO restoration_signals"
+            " (signal_id, incident_id, source, act_seq, payload)"
+            " VALUES (?,?,?,?,?)",
+            (
+                signal.signal_id,
+                signal.incident_id,
+                signal.source,
+                self._next_seq("restoration_signals"),
+                signal.model_dump_json(),
+            ),
+        )
+
+    def list_restoration_signals(
+        self, incident_id: str
+    ) -> list[RestorationSignal]:
+        rows = self._run(
+            "SELECT payload FROM restoration_signals WHERE incident_id = ?"
+            " ORDER BY act_seq",
+            (incident_id,),
+            fetch="all",
+        )
+        return [RestorationSignal.model_validate(json.loads(r[0])) for r in rows]
+
+    def add_restoration_confirmation(
+        self, confirmation: RestorationConfirmation
+    ) -> None:
+        self._run(
+            "INSERT INTO restoration_confirmations"
+            " (confirmation_id, incident_id, act_seq, payload)"
+            " VALUES (?,?,?,?)",
+            (
+                confirmation.confirmation_id,
+                confirmation.incident_id,
+                self._next_seq("restoration_confirmations"),
+                confirmation.model_dump_json(),
+            ),
+        )
+
+    def list_restoration_confirmations(
+        self, incident_id: str
+    ) -> list[RestorationConfirmation]:
+        rows = self._run(
+            "SELECT payload FROM restoration_confirmations"
+            " WHERE incident_id = ? ORDER BY act_seq",
+            (incident_id,),
+            fetch="all",
+        )
+        return [
+            RestorationConfirmation.model_validate(json.loads(r[0])) for r in rows
+        ]
+
+    def add_incident_close_act(self, act: IncidentCloseAct) -> None:
+        self._run(
+            "INSERT INTO incident_close_acts"
+            " (act_id, incident_id, act_seq, payload) VALUES (?,?,?,?)",
+            (
+                act.act_id,
+                act.incident_id,
+                self._next_seq("incident_close_acts"),
+                act.model_dump_json(),
+            ),
+        )
+
+    def get_incident_close_act(
+        self, incident_id: str
+    ) -> IncidentCloseAct | None:
+        row = self._run(
+            "SELECT payload FROM incident_close_acts WHERE incident_id = ?",
+            (incident_id,),
+            fetch="one",
+        )
+        return IncidentCloseAct.model_validate(json.loads(row[0])) if row else None
+
+    def add_incident_split(self, split: IncidentSplit) -> None:
+        self._run(
+            "INSERT INTO incident_splits"
+            " (split_id, incident_id, restored_incident_id,"
+            " continuing_incident_id, act_seq, payload)"
+            " VALUES (?,?,?,?,?,?)",
+            (
+                split.split_id,
+                split.incident_id,
+                split.restored_incident_id,
+                split.continuing_incident_id,
+                self._next_seq("incident_splits"),
+                split.model_dump_json(),
+            ),
+        )
+
+    def get_incident_split(self, split_id: str) -> IncidentSplit | None:
+        row = self._run(
+            "SELECT payload FROM incident_splits WHERE split_id = ?",
+            (split_id,),
+            fetch="one",
+        )
+        return IncidentSplit.model_validate(json.loads(row[0])) if row else None
+
+    def list_incident_splits(self) -> list[IncidentSplit]:
+        rows = self._run(
+            "SELECT payload FROM incident_splits ORDER BY act_seq", fetch="all"
+        )
+        return [IncidentSplit.model_validate(json.loads(r[0])) for r in rows]
+
+    def add_post_close_contradiction(
+        self, contradiction: PostCloseContradiction
+    ) -> None:
+        self._run(
+            "INSERT INTO post_close_contradictions"
+            " (contradiction_id, closed_incident_id, fresh_incident_id,"
+            " act_seq, payload) VALUES (?,?,?,?,?)",
+            (
+                contradiction.contradiction_id,
+                contradiction.closed_incident_id,
+                contradiction.fresh_incident_id,
+                self._next_seq("post_close_contradictions"),
+                contradiction.model_dump_json(),
+            ),
+        )
+
+    def list_post_close_contradictions(
+        self,
+    ) -> list[PostCloseContradiction]:
+        rows = self._run(
+            "SELECT payload FROM post_close_contradictions ORDER BY act_seq",
+            fetch="all",
+        )
+        return [
+            PostCloseContradiction.model_validate(json.loads(r[0])) for r in rows
+        ]
 
     # -- topology index ------------------------------------------------
     def load_topology(self, payload: dict, loaded_at: datetime) -> None:

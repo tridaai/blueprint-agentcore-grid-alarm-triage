@@ -37,6 +37,11 @@ stops there. A work order in this system is:
 The state of a version (draft / approved / rejected) is derived
 from its decision acts, never stored on the draft — so the draft
 row an approval pins cannot drift from the artefact approved.
+
+Round 7 adds the **completion act**: a named recording that the
+field work on an approved version is done. It changes no derived
+state — the gated incident close (``grid_triage/restoration.py``)
+reads the decision state and this act together.
 """
 
 from __future__ import annotations
@@ -53,6 +58,7 @@ from grid_triage.models import (
     Notification,
     WorkOrder,
     WorkOrderAssignment,
+    WorkOrderCompletion,
     WorkOrderDecision,
 )
 from grid_triage.roster import RosterView
@@ -202,6 +208,18 @@ def _decision_id(body: dict) -> str:
     return f"WOD-{digest[:16]}"
 
 
+def _completion_id(body: dict) -> str:
+    digest = hashlib.sha256(canonical_json(body)).hexdigest()
+    return f"WOC-{digest[:16]}"
+
+
+# The roles that may record a completion (Round 7): the crew that
+# did the work reports it done; the control room can record it on
+# the crew's report. Kept beside the work pack's approver roles —
+# completion is a field fact, not an approval.
+COMPLETION_ROLES = ["field_crew", "operator", "duty_manager"]
+
+
 def _notification_id(order_id: str, channel: str, body: str) -> str:
     digest = hashlib.sha256(
         canonical_json({"order_id": order_id, "channel": channel, "body": body})
@@ -331,17 +349,30 @@ class WorkOrderService:
         orders = self.store.list_work_orders(incident_id)
         return orders[-1] if orders else None
 
+    def completion_for(self, order_id: str) -> WorkOrderCompletion | None:
+        """The completion act recorded against this exact version,
+        if any (Round 7). Completion is a separate fact from the
+        decision state: ``state_of`` stays the decision-derived
+        draft/approved/rejected, and this act is what the gated
+        incident close reads."""
+        completions = self.store.list_work_order_completions(order_id)
+        return completions[-1] if completions else None
+
     def view(self, order: WorkOrder) -> dict:
         """The surface shape: the pinned artefact plus its derived
         state, current assignment and decision, read from the acts."""
         body = order.model_dump(mode="json")
         assignment = self.current_assignment(order.order_id)
         decision = self.decision_for(order.order_id)
+        completion = self.completion_for(order.order_id)
         body["state"] = self.state_of(order)
         body["assignment"] = (
             assignment.model_dump(mode="json") if assignment else None
         )
         body["decision"] = decision.model_dump(mode="json") if decision else None
+        body["completion"] = (
+            completion.model_dump(mode="json") if completion else None
+        )
         return body
 
     def list_by_state(self, state: str | None = None) -> list[WorkOrder]:
@@ -627,6 +658,70 @@ class WorkOrderService:
             item_id=f"EV-{act.decision_id}",
         )
         return act, notifications
+
+    def complete(
+        self,
+        order_id: str,
+        completed_by: str,
+        role: str,
+        completed_at: datetime,
+        note: str | None = None,
+    ) -> WorkOrderCompletion:
+        """Record that the field work on an approved order is done
+        (Round 7). A named act against the current, approved
+        version only: a draft has no work to complete, a rejected
+        version never had any, a superseded version's completion
+        would pin the wrong artefact, and a completion is recorded
+        once — the fact does not get recorded twice."""
+        order = self.store.get_work_order(order_id)
+        if order is None:
+            raise KeyError(f"no such work order: {order_id}")
+        problems: list[str] = []
+        if not completed_by or not completed_by.strip():
+            problems.append("a completion names who records it")
+        if role not in COMPLETION_ROLES:
+            problems.append(
+                f"role {role!r} may not record a completion (allowed: "
+                f"{', '.join(COMPLETION_ROLES)})"
+            )
+        head = self.head(order.incident_id)
+        if head is None or head.order_id != order_id:
+            problems.append(
+                f"work order {order_id} is not the current version — "
+                "only the current version can be completed"
+            )
+        elif self.state_of(order) != APPROVED:
+            problems.append(
+                f"work order {order_id} is {self.state_of(order)} — "
+                "only an approved order has field work to complete"
+            )
+        if self.completion_for(order_id) is not None:
+            problems.append(
+                f"work order {order_id} already has a completion act "
+                "recorded — the fact is recorded once"
+            )
+        if problems:
+            raise WorkOrderRefusal(problems)
+        body = {
+            "order_id": order_id,
+            "incident_id": order.incident_id,
+            "completed_by": completed_by,
+            "role": role,
+            "completed_at": completed_at.isoformat(),
+            "note": note,
+        }
+        completion = WorkOrderCompletion(
+            completion_id=_completion_id(body), **body
+        )
+        self.store.add_work_order_completion(completion)
+        self.chain.append(
+            order.incident_id,
+            "work_order_completion",
+            completion.model_dump(mode="json"),
+            recorded_on=completed_at,
+            item_id=f"EV-{completion.completion_id}",
+        )
+        return completion
 
     def _draft_notifications(
         self,

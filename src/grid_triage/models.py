@@ -359,6 +359,26 @@ class WorkOrderDecision(BaseModel):
     notification_ids: list[str] = Field(default_factory=list)
 
 
+class WorkOrderCompletion(BaseModel):
+    """A named act recording that the field work on one approved
+    work-order version is done (Round 7). Rounds 1–6 derived a
+    version's state from its decision acts alone, so an approved
+    order had no "completed" state; the gated incident close
+    needs one. Like every act here it is insert-only and names
+    its actor and role — the derived state of a version becomes
+    ``completed`` only while this act is its latest completion
+    fact. Recorded against the exact ``order_id`` it completes:
+    completing a superseded version completes nothing current."""
+
+    completion_id: str
+    order_id: str
+    incident_id: str
+    completed_by: str
+    role: str
+    completed_at: datetime
+    note: str | None = None
+
+
 class FieldUpdate(BaseModel):
     """One field update posted against one incident (Round 6).
 
@@ -438,6 +458,146 @@ class IncidentRevision(BaseModel):
     revised_classification_id: str | None = None
     prior_estimate_id: str | None = None
     revised_estimate_id: str | None = None
+
+
+class RestorationSignal(BaseModel):
+    """One restoration reading from a signal source (Round 7).
+
+    Restoration is confirmed from signals, never from narrative:
+    a signal is a reading recorded against one incident by a
+    named recorder, from one of the restoration pack's sources —
+    ``meter`` / ``oms`` (per-device restoration readings from the
+    meter/OMS-shaped systems) or ``topology`` (a feeder supply
+    reading from the topology/SCADA-shaped layer, naming the
+    feeder it speaks for). Signals are insert-only; a device's
+    current state is its latest signal's state, so a later
+    ``still_out`` reading supersedes an earlier ``restored`` one
+    by record order, never by edit."""
+
+    signal_id: str
+    incident_id: str
+    pack_version: str
+    source: str  # meter | oms | topology
+    device_id: str | None = None
+    feeder_id: str | None = None
+    state: str  # restored | still_out | supplied | not_supplied
+    observed_at: datetime
+    recorded_by: str
+    role: str
+
+
+class RestorationConfirmation(BaseModel):
+    """The computed restoration position of one incident
+    (Round 7).
+
+    Assembled in code from the recorded signals, the incident's
+    field updates and its pinned topology — never narrated.
+    ``classes`` names every evidence class the restoration pack
+    requires, each ``present`` or ``absent`` with the artefact
+    ids behind the verdict; ``missing_classes`` is the absent
+    list. ``status`` is ``complete`` only when every class is
+    present and every device in the incident's outage set is
+    restored; otherwise ``partial``, and a partial confirmation
+    cannot close an incident. Restored and outstanding customer
+    counts are sums of the pinned topology's per-device customer
+    counts over the outage set. Confirmations are
+    content-addressed and supersede by link: a recomputation that
+    changes anything is a new artefact, the earlier one stands."""
+
+    confirmation_id: str
+    incident_id: str
+    pack_version: str
+    status: str  # complete | partial
+    classes: dict = Field(default_factory=dict)
+    missing_classes: list[str] = Field(default_factory=list)
+    restored_devices: list[str] = Field(default_factory=list)
+    outstanding_devices: list[str] = Field(default_factory=list)
+    restored_customers: int = 0
+    outstanding_customers: int = 0
+    total_customers: int | None = None
+    computed_at: datetime
+    supersedes: str | None = None
+
+
+class IncidentCloseAct(BaseModel):
+    """The gated close of one incident (Round 7).
+
+    The R4 closure act records the facts of a close; this act is
+    the gate that must pass before those facts may be recorded:
+    a named operator, a **complete** restoration confirmation
+    bound by id, the R4 closure and its ETR-vs-actual outcome
+    bound by id (the accuracy-ledger entry — linked, never
+    duplicated), and the work-order position at close: every
+    approved order completed, or explicitly waived here with a
+    reason. Insert-only; the incident row itself is never
+    mutated by a close."""
+
+    act_id: str
+    incident_id: str
+    pack_version: str
+    confirmation_id: str
+    closure_id: str
+    outcome_id: str
+    memory_record_id: str
+    closed_by: str
+    role: str
+    restored_at: datetime
+    completed_orders: list[str] = Field(default_factory=list)
+    waived_orders: list[dict] = Field(default_factory=list)
+    closed_at: datetime
+
+
+class IncidentSplit(BaseModel):
+    """One split of a partially restored incident (Round 7).
+
+    When only part of an incident's outage set is restored, a
+    named operator may divide it by this act: a **restored part**
+    (a new incident holding the restored devices' alarms, which
+    can then be confirmed and closed on its own evidence) and a
+    **continuing incident** (a new incident holding the
+    outstanding devices' alarms, still open). The partition —
+    devices and customers on each side — is computed from the
+    partial confirmation of record and stated here; the source
+    incident's own artefacts are never edited, and supersession
+    lives on this link, exactly as with R6 revisions."""
+
+    split_id: str
+    incident_id: str
+    restored_incident_id: str
+    continuing_incident_id: str
+    confirmation_id: str
+    pack_version: str
+    split_by: str
+    role: str
+    restored_devices: list[str] = Field(default_factory=list)
+    continuing_devices: list[str] = Field(default_factory=list)
+    restored_customers: int = 0
+    continuing_customers: int = 0
+    continuing_estimate_id: str | None = None
+    split_at: datetime
+
+
+class PostCloseContradiction(BaseModel):
+    """A post-close alarm that contradicts a recorded restoration
+    (Round 7).
+
+    A closed incident is never reopened and never re-correlated
+    (the R6 rule stands). When a field update brings a new alarm
+    on a device of a closed incident's member set, the alarm does
+    not touch the closed incident: this record names the
+    contradiction, and the alarm opens a **fresh incident**
+    linked back here. The record is visible from both incidents'
+    reads. ``fresh_incident_id`` is None only when the carried
+    alarm cannot anchor an incident of its own — the
+    contradiction is recorded either way."""
+
+    contradiction_id: str
+    closed_incident_id: str
+    fresh_incident_id: str | None = None
+    alarm_id: str
+    device_id: str
+    closure_id: str
+    recorded_at: datetime
 
 
 class Notification(BaseModel):
