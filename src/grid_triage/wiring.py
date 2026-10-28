@@ -10,9 +10,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from grid_triage.agent import IncidentAssembler, model_for_profile
+from grid_triage.cause import CauseService
 from grid_triage.config import Settings
 from grid_triage.evidence import EvidenceChain
+from grid_triage.memory import LocalMemoryDouble, MemoryService
 from grid_triage.object_store import LocalObjectStore
+from grid_triage.packs import EvidencePackService
 from grid_triage.seed import ReferenceFeedAdapter
 from grid_triage.services import CorrelationService, IngestService
 from grid_triage.severity import SeverityService
@@ -38,10 +41,24 @@ class Services:
         self.intake = IngestService(self.store)
         self.correlator = CorrelationService(self.store, self.chain)
         self.feed = ReferenceFeedAdapter()
-        self.assembler = IncidentAssembler(
-            self.store, self.chain, model_for_profile(settings.model_profile)
-        )
         self.severity = SeverityService(self.store, self.chain)
+        self.cause = CauseService(self.store, self.chain)
+        # The memory port: AgentCore Memory in production; the
+        # local double over the store port here (Round 3).
+        self.memory_port = LocalMemoryDouble(self.store)
+        self.memory = MemoryService(
+            self.store, self.memory_port, self.cause, self.severity
+        )
+        self.packs = EvidencePackService(
+            self.store, self.chain, self.cause, self.severity, self.memory
+        )
+        self.assembler = IncidentAssembler(
+            self.store,
+            self.chain,
+            model_for_profile(settings.model_profile),
+            cause=self.cause,
+            memory=self.memory,
+        )
 
 
 def build_services(settings: Settings | None = None) -> Services:

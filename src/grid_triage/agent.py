@@ -12,7 +12,11 @@ assemble its brief from the correlated alarms and the topology
 slice. Every statement the model proposes carries citations to
 alarm evidence; a citation that does not resolve to a member alarm
 of this incident is **refused** in code — the whole brief, not just
-the sentence.
+the sentence. Round 3 widens the evidence, not the licence: the
+incident's root-cause classification is computed first, and prior
+incidents retrieved from the memory port join the facts — a prior
+may be quoted only as its record states, and a misattributed class
+refuses the brief on the same terms.
 
 Model profiles:
 - ``offline`` (default): a deterministic composer. No key, no
@@ -30,11 +34,13 @@ import re
 from datetime import datetime
 from typing import Any, Protocol
 
+from grid_triage.cause import CAUSE_PACK, CauseService
 from grid_triage.evidence import EvidenceChain
 from grid_triage.models import BriefStatement, Citation, IncidentBrief
 from grid_triage.severity import SeverityService
 
 _BAND_TOKEN = re.compile(r"\bSEV-[1-4]\b|\bUNRATED\b")
+_CLASS_TOKENS = [c for c in CAUSE_PACK["classes"]]
 
 
 class ModelNotConfigured(RuntimeError):
@@ -58,6 +64,42 @@ class BandMismatchRefusal(RuntimeError):
     def __init__(self, problems: list[str]):
         self.problems = problems
         super().__init__("band mismatch: " + "; ".join(problems))
+
+
+class PriorAttributionRefusal(RuntimeError):
+    """Raised when a proposed brief attributes to a prior incident
+    a root-cause class the memory record does not state (Round 3):
+    a prior's facts may be quoted only as recorded."""
+
+    def __init__(self, problems: list[str]):
+        self.problems = problems
+        super().__init__("prior misattribution: " + "; ".join(problems))
+
+
+def prior_problems(statements: list[BriefStatement], memory) -> list[str]:
+    """Check statements that cite memory records: any root-cause
+    class named in the statement's text must be the recorded class
+    of a record the statement cites. Naming a different class for
+    a prior — however plausible — is a misattribution."""
+    problems: list[str] = []
+    if memory is None:
+        return problems
+    for stmt in statements:
+        cited = []
+        for cit in stmt.citations:
+            record = memory.get_record(cit.evidence_item_id)
+            if record is not None:
+                cited.append(record)
+        if not cited:
+            continue
+        recorded = {r.cause_class for r in cited}
+        for token in _CLASS_TOKENS:
+            if token in stmt.text.lower() and token not in recorded:
+                problems.append(
+                    f"brief attributes class {token} to a prior recorded as "
+                    f"{', '.join(sorted(recorded))}: {stmt.text[:40]!r}"
+                )
+    return problems
 
 
 def band_problems(statements: list[BriefStatement], assessed_band: str) -> list[str]:
@@ -99,10 +141,13 @@ def _dig(payload: dict, field: str) -> Any:
 
 class CitationResolver:
     """Checks citations against the incident's member-alarm
-    evidence payloads."""
+    evidence payloads — and, from Round 3, against prior-incident
+    memory records: a citation may name a memory record id, and
+    its field must exist in the record as stored."""
 
-    def __init__(self, chain: EvidenceChain):
+    def __init__(self, chain: EvidenceChain, memory=None):
         self.chain = chain
+        self.memory = memory
 
     def problems(self, incident_id: str, statements: list[BriefStatement]) -> list[str]:
         items = {i.item_id: i for i in self.chain.store.list_evidence(incident_id)}
@@ -114,7 +159,21 @@ class CitationResolver:
             for cit in stmt.citations:
                 item = items.get(cit.evidence_item_id)
                 if item is None:
-                    problems.append(f"unknown evidence item {cit.evidence_item_id}")
+                    record = (
+                        self.memory.get_record(cit.evidence_item_id)
+                        if self.memory is not None
+                        else None
+                    )
+                    if record is None:
+                        problems.append(
+                            f"unknown evidence item {cit.evidence_item_id}"
+                        )
+                        continue
+                    if _dig(record.model_dump(mode="json"), cit.field) is None:
+                        problems.append(
+                            f"field {cit.field!r} absent in memory record "
+                            f"{cit.evidence_item_id}"
+                        )
                     continue
                 payload = self.chain.payload_of(item)
                 if _dig(payload, cit.field) is None:
@@ -168,6 +227,26 @@ class OfflineComposer:
                 BriefStatement(
                     text=f"Devices reporting: {', '.join(devices)}.",
                     citations=[Citation(evidence_item_id=first["item_id"], field="device_id")],
+                )
+            )
+        priors = [f for f in facts if f["field"] == "_prior"]
+        for prior in priors:
+            statements.append(
+                BriefStatement(
+                    text=(
+                        f"Prior incident {prior['record_incident_id']} on "
+                        f"{prior['feeder_id']} (recorded cause: "
+                        f"{prior['cause_class']}): {prior['resolution_summary']}"
+                    ),
+                    citations=[
+                        Citation(
+                            evidence_item_id=prior["item_id"], field="cause_class"
+                        ),
+                        Citation(
+                            evidence_item_id=prior["item_id"],
+                            field="resolution_summary",
+                        ),
+                    ],
                 )
             )
         severity = next((f for f in facts if f["field"] == "_severity"), None)
@@ -251,13 +330,24 @@ class IncidentAssembler:
     is the verified brief. Severity is computed by the severity
     engine (Law 3) before the model is consulted, recorded on the
     incident's evidence chain, and handed to the model as facts —
-    the brief may restate the assessed band and no other."""
+    the brief may restate the assessed band and no other. From
+    Round 3 the incident is also classified (the classification
+    pack), and prior incidents retrieved from memory join the
+    facts: the model may quote a prior only as recorded — its
+    citations resolve against the memory records themselves, and
+    a class attributed to a prior that the record does not state
+    refuses the brief."""
 
-    def __init__(self, store, chain: EvidenceChain, model: ModelPort):
+    def __init__(self, store, chain: EvidenceChain, model: ModelPort,
+                 cause: CauseService | None = None, memory=None):
         self.store = store
         self.chain = chain
         self.model = model
-        self.resolver = CitationResolver(chain)
+        self.cause = cause or CauseService(store, chain)
+        self.memory = memory  # a MemoryService, or None
+        self.resolver = CitationResolver(
+            chain, memory.memory if memory is not None else None
+        )
         self.severity = SeverityService(store, chain)
 
     # -- tools (plain functions, Strands shape) ----------------------
@@ -323,14 +413,53 @@ class IncidentAssembler:
             )
         return facts
 
+    def read_prior_facts(self, hits) -> list[dict[str, Any]]:
+        """Retrieved priors as model facts. The citable item is the
+        memory record itself, by id — the resolver checks fields
+        against the record as stored."""
+        facts: list[dict[str, Any]] = []
+        for hit in hits:
+            record = hit.record
+            facts.append(
+                {
+                    "item_id": record.record_id,
+                    "field": "_prior",
+                    "record_incident_id": record.incident_id,
+                    "feeder_id": record.feeder_id,
+                    "cause_class": record.cause_class,
+                    "severity_band": record.severity_band,
+                    "resolution_summary": record.resolution_summary,
+                    "closed_at": record.closed_at.isoformat(),
+                    "score": hit.score,
+                }
+            )
+            for field in (
+                "cause_class",
+                "resolution_summary",
+                "feeder_id",
+                "severity_band",
+            ):
+                facts.append(
+                    {
+                        "item_id": record.record_id,
+                        "field": field,
+                        "value": getattr(record, field),
+                    }
+                )
+        return facts
+
     # -- the step ------------------------------------------------------
     def assemble(self, incident_id: str, now: datetime) -> IncidentBrief:
         incident = self.store.get_incident(incident_id)
         if incident is None:
             raise KeyError(f"no such incident: {incident_id}")
+        self.cause.classify(incident_id, now)
         assessment = self.severity.assess(incident_id, now)
         facts = self.read_incident_facts(incident_id)
         facts += self.read_severity_facts(assessment)
+        if self.memory is not None:
+            hits = self.memory.retrieve_for_incident(incident_id, now)
+            facts += self.read_prior_facts(hits)
         statements = self.model.propose_brief(facts)
         problems = self.resolver.problems(incident_id, statements)
         if problems:
@@ -338,6 +467,11 @@ class IncidentAssembler:
         mismatches = band_problems(statements, assessment.band)
         if mismatches:
             raise BandMismatchRefusal(mismatches)
+        misattributions = prior_problems(
+            statements, self.memory.memory if self.memory is not None else None
+        )
+        if misattributions:
+            raise PriorAttributionRefusal(misattributions)
         brief = IncidentBrief(
             brief_id=f"BRIEF-{incident_id}-{len(self.store.list_briefs(incident_id)) + 1:03d}",
             incident_id=incident_id,
