@@ -481,3 +481,139 @@ class StormService:
         )
         self.store.add_storm_declaration(act)
         return act
+
+    # -- the post-storm review -------------------------------------------
+    def _review_figures(self, declaration_id: str) -> tuple[list[str], dict]:
+        """The review's whole computation, from artefacts only:
+        the incidents stamped with the declaration, their current
+        severity bands, their closures and their ETR outcomes.
+        Shared by compute and verify so the verifier re-performs
+        exactly what the computer performed."""
+        incidents = [
+            i
+            for i in self.store.list_incidents()
+            if i.storm_declaration_id == declaration_id
+        ]
+        by_band: dict[str, int] = {}
+        closed = 0
+        for incident in incidents:
+            history = self.store.list_severity_assessments(incident.incident_id)
+            band = history[-1].band if history else "UNASSESSED"
+            by_band[band] = by_band.get(band, 0) + 1
+            if self.store.get_incident_closure(incident.incident_id) is not None:
+                closed += 1
+        outcomes = [
+            o
+            for o in self.store.list_etr_outcomes()
+            if o.storm_declaration_id == declaration_id
+        ]
+        compared = [o for o in outcomes if o.status == "compared"]
+        signed = [o.signed_error_minutes for o in compared]
+        absolute = [o.absolute_error_minutes for o in compared]
+        figures = {
+            "incident_count": len(incidents),
+            "incidents_by_band": dict(sorted(by_band.items())),
+            "closed_incident_count": closed,
+            "etr_compared_count": len(compared),
+            "etr_unestimated_closures": len(outcomes) - len(compared),
+            "etr_mean_signed_error_minutes": (
+                round(sum(signed) / len(signed), 3) if signed else None
+            ),
+            "etr_mean_absolute_error_minutes": (
+                round(sum(absolute) / len(absolute), 3) if absolute else None
+            ),
+            "etr_max_absolute_error_minutes": max(absolute) if absolute else None,
+        }
+        return sorted(i.incident_id for i in incidents), figures
+
+    def compute_review(
+        self, declaration_id: str, computed_by: str, computed_at: datetime
+    ) -> StormReview:
+        """Assemble the post-storm review of one window. Only
+        after stand-down: a review of a window still open would
+        grade a record that is still being written."""
+        problems: list[str] = []
+        if not computed_by or not computed_by.strip():
+            problems.append("a post-storm review names who computes it")
+        window, found = self._window_for_act(declaration_id, "review")
+        problems.extend(found)
+        if window and window["stand_down"] is None:
+            problems.append(
+                f"storm window {declaration_id} is still open — the "
+                "review is computed after stand-down, from the "
+                "window's closed record"
+            )
+        if problems:
+            raise StormRefusal(problems)
+        declare = window["declare"]
+        stand_down = window["stand_down"]
+        assert stand_down is not None
+        incident_ids, figures = self._review_figures(declaration_id)
+        body = {
+            "declaration_id": declaration_id,
+            "pack_version": self.pack["version"],
+            "supersedes": None,
+            "declared_at": declare.declared_at.isoformat(),
+            "stood_down_at": stand_down.declared_at.isoformat(),
+            "feeders": list(stand_down.feeders),
+            "region": stand_down.region,
+            "incident_ids": incident_ids,
+            "figures": figures,
+            "computed_by": computed_by,
+            "computed_at": computed_at.isoformat(),
+        }
+        prior = self.review_for(declaration_id)
+        if prior is not None:
+            # Identical recomputation against the same head: a
+            # no-op, not a new link (the severity discipline).
+            link_free = {"review_id", "supersedes"}
+            candidate = StormReview(review_id="STORMREV-candidate", **body)
+            if candidate.model_dump(exclude=link_free) == prior.model_dump(
+                exclude=link_free
+            ):
+                return prior
+            body["supersedes"] = prior.review_id
+        review = StormReview(review_id=_hash_id("STORMREV", body), **body)
+        self.store.add_storm_review(review)
+        return review
+
+    def review_for(self, declaration_id: str) -> StormReview | None:
+        history = self.store.list_storm_reviews(declaration_id)
+        return history[-1] if history else None
+
+    def reviews(self, declaration_id: str) -> list[StormReview]:
+        return self.store.list_storm_reviews(declaration_id)
+
+    def get_review(self, review_id: str) -> StormReview | None:
+        return self.store.get_storm_review(review_id)
+
+    def verify_review(self, review_id: str) -> list[str]:
+        """Re-perform a review from the store and name every
+        drift. Empty means the review recomputes exactly."""
+        review = self.store.get_storm_review(review_id)
+        if review is None:
+            raise KeyError(f"no such storm review: {review_id}")
+        problems: list[str] = []
+        declare = self.get_declaration(review.declaration_id)
+        if declare is None or declare.kind != DECLARE:
+            problems.append(
+                f"the review's declaration {review.declaration_id} is not on record"
+            )
+            return problems
+        window, _ = self._window_for_act(review.declaration_id, "review")
+        stand_down = window["stand_down"] if window else None
+        if stand_down is None:
+            problems.append("the review's window has no stand-down act on record")
+            return problems
+        if review.declared_at != declare.declared_at:
+            problems.append("the review's window start does not recompute")
+        if review.stood_down_at != stand_down.declared_at:
+            problems.append("the review's window end does not recompute")
+        if review.feeders != stand_down.feeders or review.region != stand_down.region:
+            problems.append("the review's window scope does not recompute")
+        incident_ids, figures = self._review_figures(review.declaration_id)
+        if review.incident_ids != incident_ids:
+            problems.append("the review's incident set does not recompute")
+        if review.figures != figures:
+            problems.append("the review's figures do not recompute")
+        return problems

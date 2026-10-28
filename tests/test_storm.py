@@ -522,6 +522,138 @@ def test_outcomes_record_the_mode_and_the_ledger_keeps_modes_separate(services):
     )
 
 
+# -- the post-storm review -------------------------------------------------
+
+
+def _closed_storm_window(services):
+    """A full window: declare, burst, assess, estimate, close,
+    stand down. Returns (declaration, incident, outcome)."""
+    declaration, incident = _correlate_burst(services, declare=True)
+    services.severity.assess(incident.incident_id, BURST_T0 + timedelta(minutes=90))
+    services.etr.estimate(incident.incident_id, BURST_T0 + timedelta(minutes=30))
+    _, outcome, _ = services.closure.close_incident(
+        incident.incident_id,
+        "op.dana",
+        "operator",
+        BURST_T0 + timedelta(minutes=400),
+        "Storm damage on Feeder 7 cleared and the feeder restored.",
+        recorded_at=BURST_T0 + timedelta(minutes=401),
+    )
+    services.storm.stand_down(
+        declaration.declaration_id,
+        "op.dana",
+        "operator",
+        "Cell has passed; damage assessment complete",
+        BURST_T0 + timedelta(hours=10),
+    )
+    return declaration, incident, outcome
+
+
+def test_review_is_refused_while_the_window_is_open(services):
+    declaration, incident = _correlate_burst(services, declare=True)
+    with pytest.raises(StormRefusal) as exc:
+        services.storm.compute_review(
+            declaration.declaration_id, "op.dana", BURST_T0 + timedelta(hours=5)
+        )
+    assert any("still open" in p for p in exc.value.problems)
+    assert services.storm.review_for(declaration.declaration_id) is None
+
+
+def test_review_assembles_the_window_from_artefacts_only(services):
+    declaration, incident, outcome = _closed_storm_window(services)
+    review = services.storm.compute_review(
+        declaration.declaration_id, "op.dana", BURST_T0 + timedelta(hours=11)
+    )
+    assert review.declaration_id == declaration.declaration_id
+    assert review.pack_version == STORM_PACK["version"]
+    assert review.incident_ids == [incident.incident_id]
+    assert review.declared_at == declaration.declared_at
+    assert review.stood_down_at == BURST_T0 + timedelta(hours=10)
+    assert review.feeders == ["FDR-07"]
+    figures = review.figures
+    assert figures["incident_count"] == 1
+    assert figures["incidents_by_band"] == {"SEV-1": 1}
+    assert figures["closed_incident_count"] == 1
+    assert figures["etr_compared_count"] == 1
+    assert figures["etr_unestimated_closures"] == 0
+    assert figures["etr_mean_signed_error_minutes"] == outcome.signed_error_minutes
+    assert figures["etr_mean_absolute_error_minutes"] == outcome.absolute_error_minutes
+    assert figures["etr_max_absolute_error_minutes"] == outcome.absolute_error_minutes
+    # The review's storm accuracy is the ledger's storm row —
+    # the same figures from the same artefacts, never blended.
+    ledger = services.closure.accuracy_ledger()
+    storm_row = next(
+        r for r in ledger["by_operating_mode"] if r["operating_mode"] == "storm"
+    )
+    assert figures["etr_mean_signed_error_minutes"] == storm_row["mean_signed_error_minutes"]
+    assert services.storm.verify_review(review.review_id) == []
+
+
+def test_review_recompute_is_a_noop_and_new_evidence_supersedes(services):
+    declaration, incident, _ = _closed_storm_window(services)
+    first = services.storm.compute_review(
+        declaration.declaration_id, "op.dana", BURST_T0 + timedelta(hours=11)
+    )
+    again = services.storm.compute_review(
+        declaration.declaration_id, "op.dana", BURST_T0 + timedelta(hours=11)
+    )
+    assert again.review_id == first.review_id
+    assert services.storm.reviews(declaration.declaration_id) == [first]
+    # A second storm incident stamped with the same declaration
+    # (correlated late, from alarms raised inside the window)
+    # moves the record: the recompute supersedes by link.
+    services.intake.ingest(
+        [
+            _burst_alarm(
+                "ALM-STM-LATE", "BRK-070", "breaker_trip",
+                BURST_T0 + timedelta(hours=2),
+            )
+        ]
+    )
+    created = services.correlator.correlate_new(services.topology)
+    assert created[0].operating_mode == "storm"
+    moved = services.storm.compute_review(
+        declaration.declaration_id, "op.dana", BURST_T0 + timedelta(hours=12)
+    )
+    assert moved.review_id != first.review_id
+    assert moved.supersedes == first.review_id
+    assert moved.figures["incident_count"] == 2
+    assert set(moved.incident_ids) == {incident.incident_id, created[0].incident_id}
+    assert services.storm.verify_review(moved.review_id) == []
+    # The superseded review still verifies against what it
+    # sealed? No — it graded a record that has since moved, and
+    # the verifier says so rather than passing it silently.
+    problems = services.storm.verify_review(first.review_id)
+    assert any("incident set" in p or "figures" in p for p in problems)
+
+
+def test_review_verify_names_a_tampered_figure(services):
+    import json
+    import sqlite3
+
+    declaration, _, _ = _closed_storm_window(services)
+    review = services.storm.compute_review(
+        declaration.declaration_id, "op.dana", BURST_T0 + timedelta(hours=11)
+    )
+    db_path = services.settings.sqlite_path
+    raw = sqlite3.connect(db_path)
+    payload = json.loads(
+        raw.execute(
+            "SELECT payload FROM storm_reviews WHERE review_id = ?",
+            (review.review_id,),
+        ).fetchone()[0]
+    )
+    payload["figures"]["etr_mean_signed_error_minutes"] = 0.0
+    raw.execute(
+        "UPDATE storm_reviews SET payload = ? WHERE review_id = ?",
+        (json.dumps(payload), review.review_id),
+    )
+    raw.commit()
+    raw.close()
+    problems = services.storm.verify_review(review.review_id)
+    assert any("figures do not recompute" in p for p in problems)
+
+
 def test_stand_down_does_not_relabel_what_the_window_stamped(services):
     declaration, incident = _correlate_burst(services, declare=True)
     services.storm.stand_down(
