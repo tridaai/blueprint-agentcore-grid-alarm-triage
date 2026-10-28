@@ -44,6 +44,20 @@ def run_demo(settings: Settings | None = None) -> Services:
     assert members == set(FLOOD_ALARM_IDS), "flood membership must be exact"
     print(f"Flood membership exact: {len(members)}/{len(FLOOD_ALARM_IDS)} alarms.")
 
+    from datetime import timedelta
+
+    from grid_triage.seed import T0
+
+    assessment = svc.severity.assess(flood.incident_id, T0 + timedelta(minutes=30))
+    print(
+        f"Severity at T+30min (formula pack {assessment.pack_version}): "
+        f"{assessment.band}, score {assessment.score} — "
+        f"{assessment.inputs['customers_affected']} customers affected, "
+        f"critical loads: "
+        f"{[c['name'] for c in assessment.inputs['critical_loads']]}; "
+        f"operator acknowledgement required: {assessment.escalation_required}."
+    )
+
     from datetime import datetime, timezone
 
     brief = svc.assembler.assemble(flood.incident_id, datetime.now(timezone.utc))

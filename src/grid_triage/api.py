@@ -18,9 +18,10 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from grid_triage import __version__
-from grid_triage.agent import CitationRefusal
+from grid_triage.agent import BandMismatchRefusal, CitationRefusal
 from grid_triage.models import Alarm
 from grid_triage.services import DuplicateAlarm
+from grid_triage.severity import SeverityRefusal
 from grid_triage.topology import TopologyView
 from grid_triage.wiring import Services, build_services
 
@@ -130,9 +131,81 @@ def assemble_brief(incident_id: str) -> dict:
         raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
     try:
         brief = s.assembler.assemble(incident_id, datetime.now(timezone.utc))
-    except CitationRefusal as exc:
+    except (CitationRefusal, BandMismatchRefusal) as exc:
         raise HTTPException(status_code=422, detail={"problems": exc.problems}) from exc
     return brief.model_dump(mode="json")
+
+
+class AssessRequest(BaseModel):
+    as_of: datetime | None = None
+
+
+@app.get("/incidents/{incident_id}/severity")
+def get_severity(incident_id: str) -> dict:
+    s = svc()
+    if s.store.get_incident(incident_id) is None:
+        raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
+    history = s.severity.history(incident_id)
+    acked = {
+        a.assessment_id for a in s.store.list_severity_acknowledgements(incident_id)
+    }
+    return {
+        "incident_id": incident_id,
+        "current": history[-1].model_dump(mode="json") if history else None,
+        "history": [a.model_dump(mode="json") for a in history],
+        "acknowledgements": [
+            a.model_dump(mode="json")
+            for a in s.store.list_severity_acknowledgements(incident_id)
+        ],
+        "pending_acknowledgement_ids": [
+            a.assessment_id
+            for a in history
+            if a.escalation_required and a.assessment_id not in acked
+        ],
+    }
+
+
+@app.post("/incidents/{incident_id}/severity/assess")
+def assess_severity(incident_id: str, request: AssessRequest | None = None) -> dict:
+    s = svc()
+    if s.store.get_incident(incident_id) is None:
+        raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
+    as_of = (request.as_of if request else None) or datetime.now(timezone.utc)
+    assessment = s.severity.assess(incident_id, as_of)
+    return assessment.model_dump(mode="json")
+
+
+class AcknowledgeRequest(BaseModel):
+    assessment_id: str
+    acknowledged_by: str
+    role: str
+
+
+@app.get("/severity/acknowledgement-queue")
+def acknowledgement_queue() -> dict:
+    s = svc()
+    return {
+        "pending": [
+            a.model_dump(mode="json") for a in s.severity.pending_acknowledgements()
+        ]
+    }
+
+
+@app.post("/severity/acknowledgements")
+def acknowledge_severity(request: AcknowledgeRequest) -> dict:
+    s = svc()
+    try:
+        ack = s.severity.acknowledge(
+            request.assessment_id,
+            request.acknowledged_by,
+            request.role,
+            datetime.now(timezone.utc),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except SeverityRefusal as exc:
+        raise HTTPException(status_code=422, detail={"problems": exc.problems}) from exc
+    return ack.model_dump(mode="json")
 
 
 @app.get("/incidents/{incident_id}/chain")

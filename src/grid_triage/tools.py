@@ -43,6 +43,16 @@ TOOL_REGISTRY: list[ToolSpec] = [
         description="Read the feeders, devices and critical loads of one topology version.",
     ),
     ToolSpec(
+        name="get_severity_assessment",
+        shape=ToolShape.READ,
+        description="Read an incident's current severity assessment and its history (Round 2).",
+    ),
+    ToolSpec(
+        name="list_escalation_queue",
+        shape=ToolShape.READ,
+        description="List severity assessments still awaiting a required operator acknowledgement (Round 2).",
+    ),
+    ToolSpec(
         name="assemble_incident_brief",
         shape=ToolShape.DRAFT,
         description="Draft the incident brief from correlated alarms, every statement cited.",

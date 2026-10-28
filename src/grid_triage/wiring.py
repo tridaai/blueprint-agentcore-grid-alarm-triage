@@ -15,6 +15,7 @@ from grid_triage.evidence import EvidenceChain
 from grid_triage.object_store import LocalObjectStore
 from grid_triage.seed import ReferenceFeedAdapter
 from grid_triage.services import CorrelationService, IngestService
+from grid_triage.severity import SeverityService
 from grid_triage.store import SqlStore
 from grid_triage.topology import TopologyView, load_topology_file
 
@@ -40,6 +41,7 @@ class Services:
         self.assembler = IncidentAssembler(
             self.store, self.chain, model_for_profile(settings.model_profile)
         )
+        self.severity = SeverityService(self.store, self.chain)
 
 
 def build_services(settings: Settings | None = None) -> Services:
