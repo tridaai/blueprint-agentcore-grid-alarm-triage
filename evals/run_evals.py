@@ -1,4 +1,4 @@
-"""Eval gate — Rounds 1–9 (grid alarm triage agent).
+"""Eval gate — Rounds 1–10 (grid alarm triage agent).
 
 Runs the planted streams through the real service graph on a
 throwaway SQLite store and grades the R1–R5 guarantees. Every
@@ -250,7 +250,7 @@ from grid_triage.agent import (  # noqa: E402
 from grid_triage.cause import classify_cause  # noqa: E402
 from grid_triage.closure import ClosureRefusal  # noqa: E402
 from grid_triage.config import Settings  # noqa: E402
-from grid_triage.etr import ETR_PACK, compute_estimate  # noqa: E402
+from grid_triage.etr import ETR_PACK, EtrRefusal, compute_estimate  # noqa: E402
 from grid_triage.models import (  # noqa: E402
     Alarm,
     BriefStatement,
@@ -337,9 +337,16 @@ def main() -> int:
     unresolved = 0
     chain_failures = 0
     briefs_missing = 0
-    now = datetime.now(timezone.utc)
+    # Briefs are assembled inside the scenario timeline, ten
+    # minutes after each incident's anchor. (Round 10: severity
+    # and ETR recomputations are forward-only — a wall-clock
+    # stamp here would make every graded replay below a rewind,
+    # and the engines now refuse those, correctly.)
     for incident in incidents:
-        brief = svc.assembler.assemble(incident.incident_id, now)
+        anchor = svc.store.get_alarm(incident.anchor_alarm_id)
+        brief = svc.assembler.assemble(
+            incident.incident_id, anchor.raised_at + timedelta(minutes=10)
+        )
         if not brief.statements:
             briefs_missing += 1
         uncited += sum(1 for s in brief.statements if not s.citations)
@@ -410,7 +417,7 @@ def main() -> int:
 
     try:
         IncidentAssembler(svc.store, svc.chain, _WrongBand()).assemble(
-            flood_incident.incident_id, datetime.now(timezone.utc)
+            flood_incident.incident_id, T0 + timedelta(minutes=30)
         )
         counters["brief_band_violations_accepted"] = 1
     except BandMismatchRefusal:
@@ -439,6 +446,12 @@ def main() -> int:
     counters["acknowledgement_flow_errors"] = ack_errors
 
     # ---- Round 3: classification, memory, priors, evidence packs ----
+    # The scenario's present for this section: the instant the
+    # graded Round 2/4 artefacts are computed at, so the brief
+    # assembly below re-performs them identically (a no-op)
+    # instead of stamping a later head the graded sections
+    # would then rewind against (Round 10's forward-only rule).
+    now = T0 + timedelta(minutes=30)
     flood_class = svc.cause.classify(flood_incident.incident_id, now)
     lone_class = svc.cause.classify(lone_incident.incident_id, now)
     counters["classification_errors"] = (
@@ -1821,7 +1834,135 @@ def main() -> int:
         if verb in console_html.lower():
             counters["control_surfaces_present"] += 1
 
-    print("Evals — grid alarm triage agent (Rounds 1-9)")
+    # --- Round 10: the red team --------------------------------
+    # Six defects the adversarial review found in the R1–R9
+    # system, replayed against a fresh incident and the recorded
+    # storm timeline. Every one must be refused. (docs/red-team.md)
+    r10_t0 = datetime(2026, 10, 20, 2, 0, tzinfo=timezone.utc)
+    svc.intake.ingest([
+        Alarm(
+            alarm_id="ALM-RT10-001", stream_id="STREAM-SCADA-SOUTH",
+            device_id="REG-1202", feeder_id="FDR-12", kind="breaker_trip",
+            severity="major", raised_at=r10_t0,
+            message="Feeder 12 regulator bank breaker tripped",
+        )
+    ])
+    created10 = [
+        i for i in svc.correlator.correlate_new(svc.topology)
+        if i.anchor_alarm_id == "ALM-RT10-001"
+    ]
+    rt10_inc = created10[0].incident_id if created10 else None
+    counters["rewound_severity_accepted"] = 0
+    counters["rewound_estimate_accepted"] = 0
+    counters["closure_graded_against_backdated_estimate"] = 0
+    counters["closure_with_packless_role"] = 0
+    counters["future_dated_restoration_accepted"] = 0
+    counters["storm_overlap_accepted"] = 0
+    if rt10_inc is None:
+        for name in (
+            "rewound_severity_accepted",
+            "rewound_estimate_accepted",
+            "closure_graded_against_backdated_estimate",
+            "closure_with_packless_role",
+            "future_dated_restoration_accepted",
+        ):
+            counters[name] += 1
+    else:
+        # RT-01: assess forward, then try to rewind the head.
+        r10_head = svc.severity.assess(rt10_inc, r10_t0 + timedelta(minutes=30))
+        try:
+            svc.severity.assess(rt10_inc, r10_t0 + timedelta(minutes=5))
+            counters["rewound_severity_accepted"] += 1
+        except SeverityRefusal:
+            pass
+        if svc.severity.current(rt10_inc).assessment_id != r10_head.assessment_id:
+            counters["rewound_severity_accepted"] += 1
+        # RT-02: find a still-open incident with a computed
+        # estimate of record (the split's continuing part is
+        # one) and try to backdate a new estimate under its
+        # standing head.
+        r10_subject = None
+        r10_head_estimate = None
+        for candidate in svc.store.list_incidents():
+            if svc.store.get_incident_closure(candidate.incident_id) is not None:
+                continue
+            head = svc.etr.current(candidate.incident_id)
+            if head is not None and head.status == "computed":
+                r10_subject = candidate.incident_id
+                r10_head_estimate = head
+                break
+        if r10_subject is None:
+            counters["rewound_estimate_accepted"] += 1
+            counters["closure_graded_against_backdated_estimate"] += 1
+        else:
+            try:
+                svc.etr.estimate(
+                    r10_subject, r10_head_estimate.as_of - timedelta(days=1)
+                )
+                counters["rewound_estimate_accepted"] += 1
+            except EtrRefusal:
+                pass
+        # RT-03: a made-up role string is not a closure act.
+        try:
+            svc.closure.close_incident(
+                rt10_inc, "mallory", "banana", r10_t0 + timedelta(minutes=60),
+                "Closed by nobody in particular.",
+                recorded_at=r10_t0 + timedelta(minutes=75),
+            )
+            counters["closure_with_packless_role"] += 1
+        except ClosureRefusal:
+            pass
+        # RT-04: a restoration dated after its own recording is
+        # refused — the ledger never grades a future as a fact.
+        try:
+            svc.closure.close_incident(
+                rt10_inc, "op.dana", "operator", r10_t0 + timedelta(days=7),
+                "Restored next week.",
+                recorded_at=r10_t0 + timedelta(minutes=75),
+            )
+            counters["future_dated_restoration_accepted"] += 1
+        except ClosureRefusal:
+            pass
+        # And that subject's own closure, when it lands, grades
+        # against the estimate of record that stood all along.
+        if r10_subject is not None:
+            _, r10_outcome, _ = svc.closure.close_incident(
+                r10_subject, "op.dana", "operator", r10_t0,
+                "Restored; the record closes on the estimate it ran against.",
+                recorded_at=r10_t0 + timedelta(minutes=30),
+            )
+            if r10_outcome.estimate_id != r10_head_estimate.estimate_id:
+                counters["closure_graded_against_backdated_estimate"] += 1
+    # RT-06: a declaration backdated into the recorded span of
+    # the (now closed) Feeder 7 window is refused.
+    try:
+        svc.storm.declare(
+            "op.rivera", "operator", "Backdated into the October cell",
+            storm_t0 + timedelta(hours=5), feeders=["FDR-07"],
+        )
+        counters["storm_overlap_accepted"] += 1
+    except StormRefusal:
+        pass
+    # RT-05: an extension cannot widen one open window onto
+    # another open window's feeder.
+    r10_w9 = svc.storm.declare(
+        "op.dana", "operator", "Cell over Feeder 9", r10_t0, feeders=["FDR-09"]
+    )
+    r10_w11 = svc.storm.declare(
+        "op.rivera", "operator", "Cell over Feeder 11",
+        r10_t0 + timedelta(minutes=5), feeders=["FDR-11"],
+    )
+    try:
+        svc.storm.extend(
+            r10_w9.declaration_id, "op.dana", "operator",
+            "Widening onto Feeder 11", r10_t0 + timedelta(minutes=10),
+            feeders=["FDR-09", "FDR-11"],
+        )
+        counters["storm_overlap_accepted"] += 1
+    except StormRefusal:
+        pass
+
+    print("Evals — grid alarm triage agent (Rounds 1-10)")
     for name, value in counters.items():
         print(f"  {name}: {value} (required 0)")
     failed = [n for n, v in counters.items() if v != 0]
