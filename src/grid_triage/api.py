@@ -5,7 +5,8 @@ This FastAPI app is the local/operations API (ingest, alarms,
 incidents, topology versions, brief assembly, chain verification;
 Round 3 adds classification, memory records, priors and evidence
 pack seal/verify; Round 4 adds ETR estimates, the closure act and
-the accuracy ledger).
+the accuracy ledger; Round 5 adds work-order drafts, crew
+assignment acts and the operator approval gate).
 The agent itself is invoked through the AgentCore Runtime app
 (``grid_triage.runtime_app``); this API exists so operators and
 tests can see and drive the triage work without an AWS account.
@@ -34,6 +35,7 @@ from grid_triage.services import DuplicateAlarm
 from grid_triage.severity import SeverityRefusal
 from grid_triage.topology import TopologyView
 from grid_triage.wiring import Services, build_services
+from grid_triage.work_orders import WorkOrderRefusal
 
 app = FastAPI(title="Grid Alarm Triage Agent — Operations API", version=__version__)
 _svc: Services | None = None
@@ -429,6 +431,174 @@ def get_closure(incident_id: str) -> dict:
 @app.get("/etr/accuracy")
 def etr_accuracy() -> dict:
     return svc().closure.accuracy_ledger()
+
+
+# -- Round 5: work-order drafts, assignment acts, the approval gate ---
+
+
+class DraftWorkOrderRequest(BaseModel):
+    drafted_by: str = "system"
+    as_of: datetime | None = None
+
+
+class ReviseWorkOrderRequest(BaseModel):
+    revised_by: str
+    operator_note: str | None = None
+    extra_materials: list[dict] | None = None
+    as_of: datetime | None = None
+
+
+class AssignWorkOrderRequest(BaseModel):
+    crew_id: str
+    assigned_by: str
+    window_start: datetime
+    window_end: datetime
+
+
+class DecideWorkOrderRequest(BaseModel):
+    decided_by: str
+    role: str
+    reason: str | None = None
+
+
+@app.post("/incidents/{incident_id}/work-orders")
+def draft_work_order(incident_id: str, request: DraftWorkOrderRequest) -> dict:
+    s = svc()
+    as_of = request.as_of or datetime.now(timezone.utc)
+    try:
+        order = s.work_orders.draft(incident_id, as_of, request.drafted_by)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except WorkOrderRefusal as exc:
+        raise HTTPException(status_code=422, detail={"problems": exc.problems}) from exc
+    return s.work_orders.view(order)
+
+
+@app.get("/incidents/{incident_id}/work-orders")
+def list_incident_work_orders(incident_id: str) -> dict:
+    s = svc()
+    if s.store.get_incident(incident_id) is None:
+        raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
+    orders = s.store.list_work_orders(incident_id)
+    return {
+        "incident_id": incident_id,
+        "current": s.work_orders.view(orders[-1]) if orders else None,
+        "orders": [s.work_orders.view(o) for o in orders],
+    }
+
+
+@app.get("/work-orders")
+def list_work_orders(state: str | None = None) -> list[dict]:
+    s = svc()
+    return [s.work_orders.view(o) for o in s.work_orders.list_by_state(state)]
+
+
+@app.get("/work-orders/{order_id}")
+def get_work_order(order_id: str) -> dict:
+    s = svc()
+    order = s.store.get_work_order(order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail=f"no such work order: {order_id}")
+    return s.work_orders.view(order)
+
+
+@app.post("/work-orders/{order_id}/revise")
+def revise_work_order(order_id: str, request: ReviseWorkOrderRequest) -> dict:
+    s = svc()
+    as_of = request.as_of or datetime.now(timezone.utc)
+    try:
+        order = s.work_orders.revise(
+            order_id,
+            request.revised_by,
+            as_of,
+            operator_note=request.operator_note,
+            extra_materials=request.extra_materials,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except WorkOrderRefusal as exc:
+        raise HTTPException(status_code=422, detail={"problems": exc.problems}) from exc
+    return s.work_orders.view(order)
+
+
+@app.post("/work-orders/{order_id}/assign")
+def assign_work_order(order_id: str, request: AssignWorkOrderRequest) -> dict:
+    s = svc()
+    try:
+        assignment = s.work_orders.assign(
+            order_id,
+            request.crew_id,
+            request.assigned_by,
+            request.window_start,
+            request.window_end,
+            datetime.now(timezone.utc),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except WorkOrderRefusal as exc:
+        raise HTTPException(status_code=422, detail={"problems": exc.problems}) from exc
+    return assignment.model_dump(mode="json")
+
+
+@app.get("/work-orders/{order_id}/assignments")
+def list_work_order_assignments(order_id: str) -> dict:
+    s = svc()
+    if s.store.get_work_order(order_id) is None:
+        raise HTTPException(status_code=404, detail=f"no such work order: {order_id}")
+    return {
+        "order_id": order_id,
+        "assignments": [
+            a.model_dump(mode="json")
+            for a in s.store.list_work_order_assignments(order_id)
+        ],
+    }
+
+
+def _decide(order_id: str, decision: str, request: DecideWorkOrderRequest) -> dict:
+    s = svc()
+    try:
+        act, notifications = s.work_orders.decide(
+            order_id,
+            decision,
+            request.decided_by,
+            request.role,
+            datetime.now(timezone.utc),
+            reason=request.reason,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except WorkOrderRefusal as exc:
+        raise HTTPException(status_code=422, detail={"problems": exc.problems}) from exc
+    order = s.store.get_work_order(order_id)
+    return {
+        "decision": act.model_dump(mode="json"),
+        "notifications": [n.model_dump(mode="json") for n in notifications],
+        "order": s.work_orders.view(order) if order else None,
+    }
+
+
+@app.post("/work-orders/{order_id}/approve")
+def approve_work_order(order_id: str, request: DecideWorkOrderRequest) -> dict:
+    return _decide(order_id, "approved", request)
+
+
+@app.post("/work-orders/{order_id}/reject")
+def reject_work_order(order_id: str, request: DecideWorkOrderRequest) -> dict:
+    return _decide(order_id, "rejected", request)
+
+
+@app.get("/work-orders/{order_id}/decisions")
+def list_work_order_decisions(order_id: str) -> dict:
+    s = svc()
+    if s.store.get_work_order(order_id) is None:
+        raise HTTPException(status_code=404, detail=f"no such work order: {order_id}")
+    return {
+        "order_id": order_id,
+        "decisions": [
+            d.model_dump(mode="json")
+            for d in s.store.list_work_order_decisions(order_id)
+        ],
+    }
 
 
 @app.get("/incidents/{incident_id}/chain")

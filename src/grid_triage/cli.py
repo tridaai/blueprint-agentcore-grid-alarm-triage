@@ -1,6 +1,7 @@
 """Operator CLI: read-only views over the store, plus the recorded
 human acts — the Round 2 acknowledgement, the Round 3 pack seal,
-the Round 4 incident closure. None of them is an operation on
+the Round 4 incident closure, the Round 5 work-order assignment
+and approval/rejection acts. None of them is an operation on
 the grid (Law 1 — the CLI has no verb that operates anything)."""
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from grid_triage.closure import ClosureRefusal
 from grid_triage.packs import PackRefusal
 from grid_triage.severity import SeverityRefusal
 from grid_triage.wiring import build_services
+from grid_triage.work_orders import WorkOrderRefusal
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -66,6 +68,32 @@ def main(argv: list[str] | None = None) -> int:
     p_closure.add_argument("incident_id")
     sub.add_parser("etr-accuracy")
     sub.add_parser("roster")
+    p_draft = sub.add_parser("work-order")
+    p_draft.add_argument("incident_id")
+    p_draft.add_argument("--by", default="system", help="the drafter (default: system)")
+    p_draft.add_argument("--as-of", default=None, help="ISO timestamp; default: now")
+    p_orders = sub.add_parser("work-orders")
+    p_orders.add_argument("--incident", default=None, help="only this incident")
+    p_orders.add_argument("--state", default=None, help="draft | approved | rejected")
+    p_revise = sub.add_parser("revise-work-order")
+    p_revise.add_argument("order_id")
+    p_revise.add_argument("--by", required=True, help="the revising operator's name")
+    p_revise.add_argument("--note", default=None, help="an operator note for the new version")
+    p_assign = sub.add_parser("assign-work-order")
+    p_assign.add_argument("order_id")
+    p_assign.add_argument("--crew", required=True, help="the crew id from the roster")
+    p_assign.add_argument("--by", required=True, help="the assigning operator's name")
+    p_assign.add_argument("--from", dest="window_start", required=True, help="work window start, ISO")
+    p_assign.add_argument("--to", dest="window_end", required=True, help="work window end, ISO")
+    p_approve = sub.add_parser("approve-work-order")
+    p_approve.add_argument("order_id")
+    p_approve.add_argument("--by", required=True, help="the approving operator's name")
+    p_approve.add_argument("--role", required=True, help="the approving operator's role")
+    p_reject = sub.add_parser("reject-work-order")
+    p_reject.add_argument("order_id")
+    p_reject.add_argument("--by", required=True, help="the rejecting operator's name")
+    p_reject.add_argument("--role", required=True, help="the rejecting operator's role")
+    p_reject.add_argument("--reason", required=True, help="why the draft is rejected")
     args = parser.parse_args(argv)
 
     svc = build_services()
@@ -261,6 +289,91 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(svc.closure.accuracy_ledger(), indent=2))
     elif args.command == "roster":
         print(json.dumps(svc.roster.payload, indent=2))
+    elif args.command == "work-order":
+        as_of = (
+            datetime.fromisoformat(args.as_of)
+            if args.as_of
+            else datetime.now(timezone.utc)
+        )
+        try:
+            order = svc.work_orders.draft(args.incident_id, as_of, args.by)
+        except KeyError:
+            print(f"no such incident: {args.incident_id}")
+            return 1
+        except WorkOrderRefusal as exc:
+            print("refused: " + "; ".join(exc.problems))
+            return 1
+        print(json.dumps(svc.work_orders.view(order), indent=2))
+    elif args.command == "work-orders":
+        if args.incident is not None:
+            if svc.store.get_incident(args.incident) is None:
+                print(f"no such incident: {args.incident}")
+                return 1
+            orders = svc.store.list_work_orders(args.incident)
+            if args.state is not None:
+                orders = [
+                    o for o in orders if svc.work_orders.state_of(o) == args.state
+                ]
+        else:
+            orders = svc.work_orders.list_by_state(args.state)
+        print(json.dumps(
+            [svc.work_orders.view(o) for o in orders], indent=2
+        ))
+    elif args.command == "revise-work-order":
+        try:
+            order = svc.work_orders.revise(
+                args.order_id,
+                args.by,
+                datetime.now(timezone.utc),
+                operator_note=args.note,
+            )
+        except KeyError:
+            print(f"no such work order: {args.order_id}")
+            return 1
+        except WorkOrderRefusal as exc:
+            print("refused: " + "; ".join(exc.problems))
+            return 1
+        print(json.dumps(svc.work_orders.view(order), indent=2))
+    elif args.command == "assign-work-order":
+        try:
+            assignment = svc.work_orders.assign(
+                args.order_id,
+                args.crew,
+                args.by,
+                datetime.fromisoformat(args.window_start),
+                datetime.fromisoformat(args.window_end),
+                datetime.now(timezone.utc),
+            )
+        except KeyError:
+            print(f"no such work order: {args.order_id}")
+            return 1
+        except WorkOrderRefusal as exc:
+            print("refused: " + "; ".join(exc.problems))
+            return 1
+        print(json.dumps(assignment.model_dump(mode="json"), indent=2))
+    elif args.command in ("approve-work-order", "reject-work-order"):
+        decision = (
+            "approved" if args.command == "approve-work-order" else "rejected"
+        )
+        try:
+            act, notifications = svc.work_orders.decide(
+                args.order_id,
+                decision,
+                args.by,
+                args.role,
+                datetime.now(timezone.utc),
+                reason=getattr(args, "reason", None),
+            )
+        except KeyError:
+            print(f"no such work order: {args.order_id}")
+            return 1
+        except WorkOrderRefusal as exc:
+            print("refused: " + "; ".join(exc.problems))
+            return 1
+        print(json.dumps({
+            "decision": act.model_dump(mode="json"),
+            "notifications": [n.model_dump(mode="json") for n in notifications],
+        }, indent=2))
     return 0
 
 

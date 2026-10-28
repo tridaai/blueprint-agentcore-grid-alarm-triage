@@ -30,6 +30,13 @@ payload names one piece of triage work:
 - ``{"action": "close_incident" | "get_closure" |
   "etr_accuracy" | "get_roster", ...}`` — the Round 4 closure
   act, the ETR accuracy ledger, and the crew roster artefact.
+- ``{"action": "draft_work_order" | "get_work_order" |
+  "list_work_orders" | "revise_work_order" |
+  "assign_work_order" | "approve_work_order" |
+  "reject_work_order", ...}`` — the Round 5 work-order drafts
+  (draft shape), their reads, and the recorded operator acts:
+  crew assignment and the approval gate. No action here operates
+  anything — approval drafts notifications, it never sends.
 
 The Runtime session id (``context.session_id``) maps to one
 triage session and is carried into the logs. All domain work
@@ -56,6 +63,7 @@ from grid_triage.packs import PackRefusal
 from grid_triage.services import DuplicateAlarm
 from grid_triage.severity import SeverityRefusal
 from grid_triage.wiring import Services, build_services
+from grid_triage.work_orders import WorkOrderRefusal
 
 log = logging.getLogger("grid_triage.runtime")
 
@@ -317,6 +325,125 @@ def handle_invocation(payload: dict, session_id: str | None = None) -> dict:
         return {"status": "ok", "ledger": svc.closure.accuracy_ledger()}
     if action == "get_roster":
         return {"status": "ok", "roster": svc.roster.payload}
+    if action == "draft_work_order":
+        incident_id = payload["incident_id"]
+        as_of = now
+        if payload.get("as_of"):
+            as_of = datetime.fromisoformat(payload["as_of"])
+        try:
+            order = svc.work_orders.draft(
+                incident_id, as_of, payload.get("drafted_by", "system")
+            )
+        except KeyError:
+            return {"status": "no_such_incident", "incident_id": incident_id}
+        except WorkOrderRefusal as exc:
+            return {
+                "status": "refused",
+                "incident_id": incident_id,
+                "problems": exc.problems,
+            }
+        return {
+            "status": "drafted",
+            "incident_id": incident_id,
+            "order": svc.work_orders.view(order),
+        }
+    if action == "get_work_order":
+        incident_id = payload["incident_id"]
+        if svc.store.get_incident(incident_id) is None:
+            return {"status": "no_such_incident", "incident_id": incident_id}
+        orders = svc.store.list_work_orders(incident_id)
+        return {
+            "status": "ok",
+            "incident_id": incident_id,
+            "current": (
+                svc.work_orders.view(orders[-1]) if orders else None
+            ),
+            "orders": [svc.work_orders.view(o) for o in orders],
+        }
+    if action == "list_work_orders":
+        return {
+            "status": "ok",
+            "orders": [
+                svc.work_orders.view(o)
+                for o in svc.work_orders.list_by_state(payload.get("state"))
+            ],
+        }
+    if action == "revise_work_order":
+        as_of = now
+        if payload.get("as_of"):
+            as_of = datetime.fromisoformat(payload["as_of"])
+        try:
+            order = svc.work_orders.revise(
+                payload["order_id"],
+                payload.get("revised_by", ""),
+                as_of,
+                operator_note=payload.get("operator_note"),
+                extra_materials=payload.get("extra_materials"),
+            )
+        except KeyError:
+            return {
+                "status": "no_such_work_order",
+                "order_id": payload.get("order_id"),
+            }
+        except WorkOrderRefusal as exc:
+            return {
+                "status": "refused",
+                "order_id": payload.get("order_id"),
+                "problems": exc.problems,
+            }
+        return {"status": "revised", "order": svc.work_orders.view(order)}
+    if action == "assign_work_order":
+        try:
+            assignment = svc.work_orders.assign(
+                payload["order_id"],
+                payload.get("crew_id", ""),
+                payload.get("assigned_by", ""),
+                datetime.fromisoformat(payload["window_start"]),
+                datetime.fromisoformat(payload["window_end"]),
+                now,
+            )
+        except KeyError:
+            return {
+                "status": "no_such_work_order",
+                "order_id": payload.get("order_id"),
+            }
+        except WorkOrderRefusal as exc:
+            return {
+                "status": "refused",
+                "order_id": payload.get("order_id"),
+                "problems": exc.problems,
+            }
+        return {
+            "status": "assigned",
+            "assignment": assignment.model_dump(mode="json"),
+        }
+    if action in ("approve_work_order", "reject_work_order"):
+        decision = "approved" if action == "approve_work_order" else "rejected"
+        try:
+            act, notifications = svc.work_orders.decide(
+                payload["order_id"],
+                decision,
+                payload.get("decided_by", ""),
+                payload.get("role", ""),
+                now,
+                reason=payload.get("reason"),
+            )
+        except KeyError:
+            return {
+                "status": "no_such_work_order",
+                "order_id": payload.get("order_id"),
+            }
+        except WorkOrderRefusal as exc:
+            return {
+                "status": "refused",
+                "order_id": payload.get("order_id"),
+                "problems": exc.problems,
+            }
+        return {
+            "status": decision,
+            "decision": act.model_dump(mode="json"),
+            "notifications": [n.model_dump(mode="json") for n in notifications],
+        }
     if action == "ingest_and_brief":
         alarms = [Alarm.model_validate(a) for a in payload.get("alarms", [])]
         try:
