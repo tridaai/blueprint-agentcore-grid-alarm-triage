@@ -235,25 +235,163 @@ def run_demo(settings: Settings | None = None) -> Services:
         "stands untouched."
     )
 
+    # Round 7: the close is earned from signals, not asserted.
     restored_at = T0 + timedelta(hours=4, minutes=30)  # 06:43 UTC
-    closure, outcome, _record = svc.closure.close_incident(
+    for device_id in (
+        "BRK-070", "REC-071", "SEC-072", "SEC-073",
+        "XF-0721", "XF-0731", "SEN-0722", "SEN-0732",
+    ):
+        svc.restoration.record_signal(
+            flood.incident_id, "meter", "disp.ray", "dispatcher",
+            restored_at - timedelta(minutes=5), "restored",
+            device_id=device_id,
+        )
+    svc.restoration.record_signal(
+        flood.incident_id, "topology", "disp.ray", "dispatcher",
+        restored_at - timedelta(minutes=4), "supplied", feeder_id="FDR-07",
+    )
+    confirmation = svc.restoration.confirm(flood.incident_id, restored_at)
+    print(
+        f"\nRestoration confirmation {confirmation.confirmation_id}: "
+        f"{confirmation.status} — {confirmation.restored_customers} of "
+        f"{confirmation.total_customers} customers restored, classes "
+        f"{ {k: v['present'] for k, v in confirmation.classes.items()} }."
+    )
+    completion = svc.work_orders.complete(
+        revised.order_id, "crew.lee", "field_crew",
+        restored_at - timedelta(minutes=2),
+        note="Vegetation cleared and the section patrolled.",
+    )
+    print(
+        f"Work order {revised.order_id} completion recorded by "
+        f"{completion.completed_by} ({completion.completion_id})."
+    )
+    act, closure, outcome, _record = svc.restoration.close_incident(
         flood.incident_id,
         "op.dana",
         "operator",
         restored_at,
         "Vegetation crew cleared the tree contact at REC-071; "
         "Feeder 7 restored after inspection.",
-        now,
+        recorded_at=now,
     )
     print(
-        f"\nClosure {closure.closure_id} recorded by {closure.closed_by}: "
-        f"restored {restored_at} — actual duration "
-        f"{outcome.actual_duration_minutes} min against the estimated "
-        f"{outcome.estimated_duration_minutes} min (signed error "
-        f"{outcome.signed_error_minutes:+} min)."
+        f"Gated close {act.act_id}: binds confirmation "
+        f"{act.confirmation_id}, closure {closure.closure_id} and "
+        f"outcome {outcome.outcome_id} — restored {restored_at}, actual "
+        f"duration {outcome.actual_duration_minutes} min against the "
+        f"estimated {outcome.estimated_duration_minutes} min (signed "
+        f"error {outcome.signed_error_minutes:+} min)."
     )
     ledger = svc.closure.accuracy_ledger()
     print(f"ETR accuracy ledger: {ledger['by_cause_class']}")
+    log = svc.event_log.build_log(flood.incident_id)
+    problems = svc.event_log.verify_log(flood.incident_id, log)
+    print(
+        f"Event log for the flood: {log['line_count']} lines, every one "
+        f"carrying its artefact id; verifier problems: {problems}."
+    )
+
+    # Round 7: a partial restoration the next morning is split,
+    # never closed whole.
+    day2 = datetime(2026, 10, 15, 8, 0, tzinfo=timezone.utc)
+    svc.intake.ingest(
+        [
+            _Alarm(alarm_id="ALM-SPL-001", stream_id="STREAM-SCADA-NORTH",
+                   device_id="BRK-070", feeder_id="FDR-07",
+                   kind="breaker_trip", severity="critical",
+                   raised_at=day2,
+                   message="Feeder 7 breaker tripped on protection"),
+            _Alarm(alarm_id="ALM-SPL-002", stream_id="STREAM-SCADA-NORTH",
+                   device_id="SEC-072", feeder_id="FDR-07",
+                   kind="phase_loss", severity="major",
+                   raised_at=day2 + timedelta(seconds=40),
+                   message="Phase loss reported by SEC-072"),
+            _Alarm(alarm_id="ALM-SPL-003", stream_id="STREAM-SCADA-NORTH",
+                   device_id="SEC-073", feeder_id="FDR-07",
+                   kind="voltage_sag", severity="major",
+                   raised_at=day2 + timedelta(seconds=70),
+                   message="Voltage sag reported by SEC-073"),
+            _Alarm(alarm_id="ALM-SPL-004", stream_id="STREAM-SCADA-NORTH",
+                   device_id="XF-0731", feeder_id="FDR-07",
+                   kind="transformer_temp_high", severity="major",
+                   raised_at=day2 + timedelta(seconds=100),
+                   message="Transformer T31 temperature high"),
+        ]
+    )
+    split_source = svc.correlator.correlate_new(svc.topology)[0]
+    svc.updates.post_update(
+        split_source.incident_id, "crew_note", "crew.lee", "field_crew",
+        day2 + timedelta(minutes=25),
+        note="North section back on; the SEC-073 branch is still out.",
+    )
+    for device_id in ("BRK-070", "REC-071", "SEC-072", "SEN-0722", "XF-0721"):
+        svc.restoration.record_signal(
+            split_source.incident_id, "meter", "disp.ray", "dispatcher",
+            day2 + timedelta(minutes=26), "restored", device_id=device_id,
+        )
+    partial = svc.restoration.confirm(
+        split_source.incident_id, day2 + timedelta(minutes=27)
+    )
+    print(
+        f"\nNext-morning incident {split_source.incident_id}: "
+        f"confirmation {partial.status} — {partial.restored_customers} "
+        f"customers restored, {partial.outstanding_customers} still out "
+        f"on {partial.outstanding_devices}. It cannot close whole."
+    )
+    split = svc.restoration.split_incident(
+        split_source.incident_id, "op.dana", "operator",
+        day2 + timedelta(minutes=30),
+    )
+    print(
+        f"Split {split.split_id}: restored part "
+        f"{split.restored_incident_id} ({split.restored_customers} "
+        f"customers), continuing incident "
+        f"{split.continuing_incident_id} ({split.continuing_customers} "
+        "customers still out)."
+    )
+    svc.restoration.record_signal(
+        split.restored_incident_id, "topology", "disp.ray", "dispatcher",
+        day2 + timedelta(minutes=35), "supplied", feeder_id="FDR-07",
+    )
+    part_confirmation = svc.restoration.confirm(
+        split.restored_incident_id, day2 + timedelta(minutes=36)
+    )
+    part_act, _c, part_outcome, _r = svc.restoration.close_incident(
+        split.restored_incident_id,
+        "op.dana",
+        "operator",
+        day2 + timedelta(minutes=40),
+        "North section of Feeder 7 restored and inspected; the "
+        "remainder continues as its own incident.",
+        recorded_at=day2 + timedelta(minutes=41),
+    )
+    print(
+        f"Restored part confirmed {part_confirmation.status} and closed "
+        f"({part_act.act_id}); its ETR outcome is "
+        f"{part_outcome.status} — no estimate was ever computed for the "
+        "part, and the ledger shows that gap rather than hiding it. "
+        f"The continuing incident stays open: "
+        f"{svc.store.get_incident_closure(split.continuing_incident_id) is None}."
+    )
+
+    # Round 7: an alarm on the closed flood's device set does not
+    # reopen it — it contradicts the restoration and opens fresh.
+    contra_update = svc.updates.post_update(
+        flood.incident_id, "alarm_observation", "disp.ray", "dispatcher",
+        restored_at + timedelta(hours=2),
+        alarm=_Alarm(
+            alarm_id="ALM-POST-001", stream_id="STREAM-SCADA-NORTH",
+            device_id="REC-071", feeder_id="FDR-07",
+            kind="recloser_lockout", severity="critical",
+            raised_at=restored_at + timedelta(hours=2),
+            message="Recloser R1 locked out again after restoration",
+        ),
+    )
+    print(
+        f"\nPost-close alarm on REC-071: {contra_update.correlation['status']} "
+        f"— {contra_update.correlation['reason']}"
+    )
     print(f"Evidence chain still valid: {svc.chain.verify_chain(flood.incident_id)}")
     return svc
 

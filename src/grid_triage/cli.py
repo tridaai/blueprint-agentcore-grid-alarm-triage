@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from grid_triage.closure import ClosureRefusal
 from grid_triage.models import Alarm
 from grid_triage.packs import PackRefusal
+from grid_triage.restoration import RestorationRefusal
 from grid_triage.revisions import RevisionRefusal, TopologyRefusal, UpdateRefusal
 from grid_triage.severity import SeverityRefusal
 from grid_triage.wiring import build_services
@@ -122,6 +123,49 @@ def main(argv: list[str] | None = None) -> int:
     p_recorr.add_argument("--as-of", default=None, help="ISO timestamp; default: now")
     p_revisions = sub.add_parser("revisions")
     p_revisions.add_argument("incident_id")
+    p_sig = sub.add_parser("restoration-signal")
+    p_sig.add_argument("incident_id")
+    p_sig.add_argument("--source", required=True, help="meter | oms | topology")
+    p_sig.add_argument("--state", required=True, help="restored | still_out | supplied | not_supplied")
+    p_sig.add_argument("--by", required=True, help="who records the signal")
+    p_sig.add_argument("--role", required=True, help="the recorder's role")
+    p_sig.add_argument("--device", default=None)
+    p_sig.add_argument("--feeder", default=None)
+    p_sig.add_argument("--observed-at", default=None, help="ISO timestamp; default: now")
+    p_signals = sub.add_parser("restoration-signals")
+    p_signals.add_argument("incident_id")
+    p_confirm = sub.add_parser("confirm-restoration")
+    p_confirm.add_argument("incident_id")
+    p_confirm.add_argument("--as-of", default=None, help="ISO timestamp; default: now")
+    p_conf = sub.add_parser("restoration-confirmation")
+    p_conf.add_argument("incident_id")
+    p_gclose = sub.add_parser("close-gated")
+    p_gclose.add_argument("incident_id")
+    p_gclose.add_argument("--by", required=True, help="the closing operator's name")
+    p_gclose.add_argument("--role", required=True, help="the closing operator's role")
+    p_gclose.add_argument("--restored-at", required=True, help="ISO timestamp supply was restored")
+    p_gclose.add_argument("--summary", required=True, help="the resolution facts")
+    p_gclose.add_argument("--waive", action="append", default=None, help="ORDER_ID=reason for a work order the closer waives (repeatable)")
+    p_cact = sub.add_parser("close-act")
+    p_cact.add_argument("incident_id")
+    p_complete = sub.add_parser("complete-work-order")
+    p_complete.add_argument("order_id")
+    p_complete.add_argument("--by", required=True, help="who records the completion")
+    p_complete.add_argument("--role", required=True, help="the recorder's role")
+    p_complete.add_argument("--note", default=None)
+    p_complete.add_argument("--completed-at", default=None, help="ISO timestamp; default: now")
+    p_split = sub.add_parser("split-incident")
+    p_split.add_argument("incident_id")
+    p_split.add_argument("--by", required=True, help="the splitting operator's name")
+    p_split.add_argument("--role", required=True, help="the splitting operator's role")
+    p_split.add_argument("--as-of", default=None, help="ISO timestamp; default: now")
+    p_splits = sub.add_parser("splits")
+    p_splits.add_argument("incident_id")
+    p_contra = sub.add_parser("contradictions")
+    p_contra.add_argument("incident_id")
+    p_log = sub.add_parser("event-log")
+    p_log.add_argument("incident_id")
+    p_log.add_argument("--format", default="json", choices=["json", "text"])
     args = parser.parse_args(argv)
 
     svc = build_services()
@@ -491,6 +535,158 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(
             [r.model_dump(mode="json") for r in chain], indent=2
         ))
+    elif args.command == "restoration-signal":
+        observed_at = (
+            datetime.fromisoformat(args.observed_at)
+            if args.observed_at
+            else datetime.now(timezone.utc)
+        )
+        try:
+            signal = svc.restoration.record_signal(
+                args.incident_id, args.source, args.by, args.role,
+                observed_at, args.state,
+                device_id=args.device, feeder_id=args.feeder,
+            )
+        except KeyError:
+            print(f"no such incident: {args.incident_id}")
+            return 1
+        except RestorationRefusal as exc:
+            print("refused: " + "; ".join(exc.problems))
+            return 1
+        print(json.dumps(signal.model_dump(mode="json"), indent=2))
+    elif args.command == "restoration-signals":
+        if svc.store.get_incident(args.incident_id) is None:
+            print(f"no such incident: {args.incident_id}")
+            return 1
+        print(json.dumps(
+            [s.model_dump(mode="json") for s in svc.restoration.list_signals(args.incident_id)],
+            indent=2,
+        ))
+    elif args.command == "confirm-restoration":
+        as_of = (
+            datetime.fromisoformat(args.as_of)
+            if args.as_of
+            else datetime.now(timezone.utc)
+        )
+        try:
+            confirmation = svc.restoration.confirm(args.incident_id, as_of)
+        except KeyError:
+            print(f"no such incident: {args.incident_id}")
+            return 1
+        print(json.dumps(confirmation.model_dump(mode="json"), indent=2))
+    elif args.command == "restoration-confirmation":
+        if svc.store.get_incident(args.incident_id) is None:
+            print(f"no such incident: {args.incident_id}")
+            return 1
+        confirmation = svc.restoration.confirmation(args.incident_id)
+        print(json.dumps(
+            confirmation.model_dump(mode="json") if confirmation else None,
+            indent=2,
+        ))
+    elif args.command == "close-gated":
+        waivers: dict[str, str] = {}
+        for entry in args.waive or []:
+            order_id, _, reason = entry.partition("=")
+            waivers[order_id.strip()] = reason.strip()
+        try:
+            act, closure, outcome, record = svc.restoration.close_incident(
+                args.incident_id,
+                args.by,
+                args.role,
+                datetime.fromisoformat(args.restored_at),
+                args.summary,
+                waivers=waivers,
+                recorded_at=datetime.now(timezone.utc),
+            )
+        except KeyError:
+            print(f"no such incident: {args.incident_id}")
+            return 1
+        except RestorationRefusal as exc:
+            print("refused: " + "; ".join(exc.problems))
+            return 1
+        print(json.dumps({
+            "close_act": act.model_dump(mode="json"),
+            "closure": closure.model_dump(mode="json"),
+            "outcome": outcome.model_dump(mode="json"),
+            "memory_record": record.model_dump(mode="json"),
+        }, indent=2))
+    elif args.command == "close-act":
+        if svc.store.get_incident(args.incident_id) is None:
+            print(f"no such incident: {args.incident_id}")
+            return 1
+        act = svc.restoration.close_act(args.incident_id)
+        print(json.dumps(
+            act.model_dump(mode="json") if act else None, indent=2
+        ))
+    elif args.command == "complete-work-order":
+        completed_at = (
+            datetime.fromisoformat(args.completed_at)
+            if args.completed_at
+            else datetime.now(timezone.utc)
+        )
+        try:
+            completion = svc.work_orders.complete(
+                args.order_id, args.by, args.role, completed_at,
+                note=args.note,
+            )
+        except KeyError:
+            print(f"no such work order: {args.order_id}")
+            return 1
+        except WorkOrderRefusal as exc:
+            print("refused: " + "; ".join(exc.problems))
+            return 1
+        print(json.dumps(completion.model_dump(mode="json"), indent=2))
+    elif args.command == "split-incident":
+        as_of = (
+            datetime.fromisoformat(args.as_of)
+            if args.as_of
+            else datetime.now(timezone.utc)
+        )
+        try:
+            split = svc.restoration.split_incident(
+                args.incident_id, args.by, args.role, as_of
+            )
+        except KeyError:
+            print(f"no such incident: {args.incident_id}")
+            return 1
+        except RestorationRefusal as exc:
+            print("refused: " + "; ".join(exc.problems))
+            return 1
+        print(json.dumps(split.model_dump(mode="json"), indent=2))
+    elif args.command == "splits":
+        if svc.store.get_incident(args.incident_id) is None:
+            print(f"no such incident: {args.incident_id}")
+            return 1
+        print(json.dumps(
+            [s.model_dump(mode="json") for s in svc.restoration.splits_for(args.incident_id)],
+            indent=2,
+        ))
+    elif args.command == "contradictions":
+        if svc.store.get_incident(args.incident_id) is None:
+            print(f"no such incident: {args.incident_id}")
+            return 1
+        print(json.dumps(
+            [c.model_dump(mode="json") for c in svc.restoration.contradictions_for(args.incident_id)],
+            indent=2,
+        ))
+    elif args.command == "event-log":
+        try:
+            log = svc.event_log.build_log(args.incident_id)
+        except KeyError:
+            print(f"no such incident: {args.incident_id}")
+            return 1
+        problems = svc.event_log.verify_log(args.incident_id, log)
+        if args.format == "text":
+            print(svc.event_log.render_text(log), end="")
+            if problems:
+                print("verification problems: " + "; ".join(problems))
+                return 1
+        else:
+            body = dict(log)
+            body["verification_problems"] = problems
+            print(json.dumps(body, indent=2))
+            if problems:
+                return 1
     return 0
 
 

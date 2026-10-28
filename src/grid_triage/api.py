@@ -31,6 +31,7 @@ from grid_triage.agent import (
 from grid_triage.closure import ClosureRefusal
 from grid_triage.models import Alarm
 from grid_triage.packs import PackRefusal
+from grid_triage.restoration import RestorationRefusal
 from grid_triage.revisions import RevisionRefusal, TopologyRefusal, UpdateRefusal
 from grid_triage.services import DuplicateAlarm
 from grid_triage.severity import SeverityRefusal
@@ -732,6 +733,220 @@ def get_revision(revision_id: str) -> dict:
     if revision is None:
         raise HTTPException(status_code=404, detail=f"no such revision: {revision_id}")
     return revision.model_dump(mode="json")
+
+
+# -- Round 7: restoration, the gated close, splits, event log ------
+
+
+class RecordSignalRequest(BaseModel):
+    source: str
+    recorded_by: str
+    role: str
+    state: str
+    observed_at: datetime | None = None
+    device_id: str | None = None
+    feeder_id: str | None = None
+
+
+@app.post("/incidents/{incident_id}/restoration/signals")
+def record_restoration_signal(incident_id: str, request: RecordSignalRequest) -> dict:
+    s = svc()
+    try:
+        signal = s.restoration.record_signal(
+            incident_id,
+            request.source,
+            request.recorded_by,
+            request.role,
+            request.observed_at or datetime.now(timezone.utc),
+            request.state,
+            device_id=request.device_id,
+            feeder_id=request.feeder_id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RestorationRefusal as exc:
+        raise HTTPException(status_code=422, detail={"problems": exc.problems}) from exc
+    return signal.model_dump(mode="json")
+
+
+@app.get("/incidents/{incident_id}/restoration/signals")
+def list_restoration_signals(incident_id: str) -> dict:
+    s = svc()
+    if s.store.get_incident(incident_id) is None:
+        raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
+    return {
+        "incident_id": incident_id,
+        "signals": [
+            sig.model_dump(mode="json")
+            for sig in s.restoration.list_signals(incident_id)
+        ],
+    }
+
+
+class ConfirmRestorationRequest(BaseModel):
+    as_of: datetime | None = None
+
+
+@app.post("/incidents/{incident_id}/restoration/confirm")
+def confirm_restoration(incident_id: str, request: ConfirmRestorationRequest) -> dict:
+    s = svc()
+    try:
+        confirmation = s.restoration.confirm(
+            incident_id, request.as_of or datetime.now(timezone.utc)
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return confirmation.model_dump(mode="json")
+
+
+@app.get("/incidents/{incident_id}/restoration/confirmation")
+def get_restoration_confirmation(incident_id: str) -> dict:
+    s = svc()
+    if s.store.get_incident(incident_id) is None:
+        raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
+    confirmation = s.restoration.confirmation(incident_id)
+    return {
+        "incident_id": incident_id,
+        "confirmation": (
+            confirmation.model_dump(mode="json") if confirmation else None
+        ),
+    }
+
+
+class GatedCloseRequest(BaseModel):
+    closed_by: str
+    role: str
+    restored_at: datetime
+    resolution_summary: str
+    waivers: dict[str, str] | None = None
+    recorded_at: datetime | None = None
+
+
+@app.post("/incidents/{incident_id}/close-gated")
+def gated_close_incident(incident_id: str, request: GatedCloseRequest) -> dict:
+    s = svc()
+    try:
+        act, closure, outcome, record = s.restoration.close_incident(
+            incident_id,
+            request.closed_by,
+            request.role,
+            request.restored_at,
+            request.resolution_summary,
+            waivers=request.waivers,
+            recorded_at=request.recorded_at,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RestorationRefusal as exc:
+        raise HTTPException(status_code=422, detail={"problems": exc.problems}) from exc
+    return {
+        "close_act": act.model_dump(mode="json"),
+        "closure": closure.model_dump(mode="json"),
+        "outcome": outcome.model_dump(mode="json"),
+        "memory_record": record.model_dump(mode="json"),
+    }
+
+
+@app.get("/incidents/{incident_id}/close-act")
+def get_close_act(incident_id: str) -> dict:
+    s = svc()
+    if s.store.get_incident(incident_id) is None:
+        raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
+    act = s.restoration.close_act(incident_id)
+    return {
+        "incident_id": incident_id,
+        "close_act": act.model_dump(mode="json") if act else None,
+    }
+
+
+class CompleteWorkOrderRequest(BaseModel):
+    completed_by: str
+    role: str
+    completed_at: datetime | None = None
+    note: str | None = None
+
+
+@app.post("/work-orders/{order_id}/complete")
+def complete_work_order(order_id: str, request: CompleteWorkOrderRequest) -> dict:
+    s = svc()
+    try:
+        completion = s.work_orders.complete(
+            order_id,
+            request.completed_by,
+            request.role,
+            request.completed_at or datetime.now(timezone.utc),
+            note=request.note,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except WorkOrderRefusal as exc:
+        raise HTTPException(status_code=422, detail={"problems": exc.problems}) from exc
+    return completion.model_dump(mode="json")
+
+
+class SplitIncidentRequest(BaseModel):
+    split_by: str
+    role: str
+    as_of: datetime | None = None
+
+
+@app.post("/incidents/{incident_id}/split")
+def split_incident(incident_id: str, request: SplitIncidentRequest) -> dict:
+    s = svc()
+    try:
+        split = s.restoration.split_incident(
+            incident_id,
+            request.split_by,
+            request.role,
+            request.as_of or datetime.now(timezone.utc),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RestorationRefusal as exc:
+        raise HTTPException(status_code=422, detail={"problems": exc.problems}) from exc
+    return split.model_dump(mode="json")
+
+
+@app.get("/incidents/{incident_id}/splits")
+def list_incident_splits(incident_id: str) -> dict:
+    s = svc()
+    if s.store.get_incident(incident_id) is None:
+        raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
+    return {
+        "incident_id": incident_id,
+        "splits": [
+            sp.model_dump(mode="json") for sp in s.restoration.splits_for(incident_id)
+        ],
+    }
+
+
+@app.get("/incidents/{incident_id}/contradictions")
+def list_incident_contradictions(incident_id: str) -> dict:
+    s = svc()
+    if s.store.get_incident(incident_id) is None:
+        raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
+    return {
+        "incident_id": incident_id,
+        "contradictions": [
+            c.model_dump(mode="json")
+            for c in s.restoration.contradictions_for(incident_id)
+        ],
+    }
+
+
+@app.get("/incidents/{incident_id}/event-log")
+def get_incident_event_log(incident_id: str, format: str = "json") -> dict:
+    s = svc()
+    try:
+        log = s.event_log.build_log(incident_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    problems = s.event_log.verify_log(incident_id, log)
+    body = dict(log)
+    body["verification_problems"] = problems
+    if format == "text":
+        body["text"] = s.event_log.render_text(log)
+    return body
 
 
 @app.get("/topology/versions")

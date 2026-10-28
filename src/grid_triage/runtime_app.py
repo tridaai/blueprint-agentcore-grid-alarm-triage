@@ -45,6 +45,15 @@ payload names one piece of triage work:
   the topology declaration act, and re-correlation under a
   declared version. Declaring and re-correlating are recorded
   operator acts over data — neither operates anything.
+- ``{"action": "record_restoration_signal" |
+  "confirm_restoration" | "get_restoration_confirmation" |
+  "close_incident_gated" | "complete_work_order" |
+  "split_incident" | "get_incident_event_log" |
+  "get_incident_contradictions", ...}`` — the Round 7 restoration
+  signals and computed confirmations, the gated close (the R4
+  ``close_incident`` act remains for the recorded facts; the
+  gated action is the one that earns a close), work-order
+  completion acts, incident splits and the event log export.
 
 The Runtime session id (``context.session_id``) maps to one
 triage session and is carried into the logs. All domain work
@@ -68,6 +77,7 @@ from grid_triage.agent import (
 from grid_triage.closure import ClosureRefusal
 from grid_triage.models import Alarm
 from grid_triage.packs import PackRefusal
+from grid_triage.restoration import RestorationRefusal
 from grid_triage.revisions import RevisionRefusal, TopologyRefusal, UpdateRefusal
 from grid_triage.services import DuplicateAlarm
 from grid_triage.severity import SeverityRefusal
@@ -549,6 +559,163 @@ def handle_invocation(payload: dict, session_id: str | None = None) -> dict:
             "status": "ok",
             "incident_id": incident_id,
             "revisions": [r.model_dump(mode="json") for r in chain],
+        }
+    if action == "record_restoration_signal":
+        incident_id = payload["incident_id"]
+        observed_at = now
+        if payload.get("observed_at"):
+            observed_at = datetime.fromisoformat(payload["observed_at"])
+        try:
+            signal = svc.restoration.record_signal(
+                incident_id,
+                payload.get("source", ""),
+                payload.get("recorded_by", ""),
+                payload.get("role", ""),
+                observed_at,
+                payload.get("state", ""),
+                device_id=payload.get("device_id"),
+                feeder_id=payload.get("feeder_id"),
+            )
+        except KeyError:
+            return {"status": "no_such_incident", "incident_id": incident_id}
+        except RestorationRefusal as exc:
+            return {
+                "status": "refused",
+                "incident_id": incident_id,
+                "problems": exc.problems,
+            }
+        return {"status": "recorded", "signal": signal.model_dump(mode="json")}
+    if action == "confirm_restoration":
+        incident_id = payload["incident_id"]
+        as_of = now
+        if payload.get("as_of"):
+            as_of = datetime.fromisoformat(payload["as_of"])
+        try:
+            confirmation = svc.restoration.confirm(incident_id, as_of)
+        except KeyError:
+            return {"status": "no_such_incident", "incident_id": incident_id}
+        return {
+            "status": "confirmed",
+            "confirmation": confirmation.model_dump(mode="json"),
+        }
+    if action == "get_restoration_confirmation":
+        incident_id = payload["incident_id"]
+        if svc.store.get_incident(incident_id) is None:
+            return {"status": "no_such_incident", "incident_id": incident_id}
+        confirmation = svc.restoration.confirmation(incident_id)
+        return {
+            "status": "ok",
+            "incident_id": incident_id,
+            "confirmation": (
+                confirmation.model_dump(mode="json") if confirmation else None
+            ),
+            "signals": [
+                sig.model_dump(mode="json")
+                for sig in svc.restoration.list_signals(incident_id)
+            ],
+        }
+    if action == "close_incident_gated":
+        incident_id = payload["incident_id"]
+        try:
+            act, closure, outcome, record = svc.restoration.close_incident(
+                incident_id,
+                payload.get("closed_by", ""),
+                payload.get("role", ""),
+                datetime.fromisoformat(payload["restored_at"]),
+                payload.get("resolution_summary", ""),
+                waivers=payload.get("waivers"),
+                recorded_at=(
+                    datetime.fromisoformat(payload["recorded_at"])
+                    if payload.get("recorded_at")
+                    else None
+                ),
+            )
+        except KeyError:
+            return {"status": "no_such_incident", "incident_id": incident_id}
+        except RestorationRefusal as exc:
+            return {
+                "status": "refused",
+                "incident_id": incident_id,
+                "problems": exc.problems,
+            }
+        return {
+            "status": "closed",
+            "close_act": act.model_dump(mode="json"),
+            "closure": closure.model_dump(mode="json"),
+            "outcome": outcome.model_dump(mode="json"),
+            "memory_record": record.model_dump(mode="json"),
+        }
+    if action == "complete_work_order":
+        order_id = payload["order_id"]
+        completed_at = now
+        if payload.get("completed_at"):
+            completed_at = datetime.fromisoformat(payload["completed_at"])
+        try:
+            completion = svc.work_orders.complete(
+                order_id,
+                payload.get("completed_by", ""),
+                payload.get("role", ""),
+                completed_at,
+                note=payload.get("note"),
+            )
+        except KeyError:
+            return {"status": "no_such_work_order", "order_id": order_id}
+        except WorkOrderRefusal as exc:
+            return {
+                "status": "refused",
+                "order_id": order_id,
+                "problems": exc.problems,
+            }
+        return {
+            "status": "completed",
+            "completion": completion.model_dump(mode="json"),
+        }
+    if action == "split_incident":
+        incident_id = payload["incident_id"]
+        as_of = now
+        if payload.get("as_of"):
+            as_of = datetime.fromisoformat(payload["as_of"])
+        try:
+            split = svc.restoration.split_incident(
+                incident_id,
+                payload.get("split_by", ""),
+                payload.get("role", ""),
+                as_of,
+            )
+        except KeyError:
+            return {"status": "no_such_incident", "incident_id": incident_id}
+        except RestorationRefusal as exc:
+            return {
+                "status": "refused",
+                "incident_id": incident_id,
+                "problems": exc.problems,
+            }
+        return {"status": "split", "split": split.model_dump(mode="json")}
+    if action == "get_incident_event_log":
+        incident_id = payload["incident_id"]
+        try:
+            log = svc.event_log.build_log(incident_id)
+        except KeyError:
+            return {"status": "no_such_incident", "incident_id": incident_id}
+        body = dict(log)
+        body["status"] = "ok"
+        body["verification_problems"] = svc.event_log.verify_log(
+            incident_id, log
+        )
+        if payload.get("format") == "text":
+            body["text"] = svc.event_log.render_text(log)
+        return body
+    if action == "get_incident_contradictions":
+        incident_id = payload["incident_id"]
+        if svc.store.get_incident(incident_id) is None:
+            return {"status": "no_such_incident", "incident_id": incident_id}
+        return {
+            "status": "ok",
+            "incident_id": incident_id,
+            "contradictions": [
+                c.model_dump(mode="json")
+                for c in svc.restoration.contradictions_for(incident_id)
+            ],
         }
     if action == "ingest_and_brief":
         alarms = [Alarm.model_validate(a) for a in payload.get("alarms", [])]
