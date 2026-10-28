@@ -7,8 +7,11 @@ including the prior incidents retrieved from memory — the
 evidence pack is sealed and verified, the ETR is computed with
 its basis on the record, a work order is drafted, revised,
 assigned and approved through the operator gate (with the
-refusals the gate exists for), and the flood is closed so the
-accuracy ledger gains its first entry.
+refusals the gate exists for). Then the field reports back,
+topology v2 is declared effective, and the flood is
+re-correlated under it — the revision's diff told plainly —
+before the flood is closed so the accuracy ledger gains its
+first entry.
 """
 
 from __future__ import annotations
@@ -177,6 +180,60 @@ def run_demo(settings: Settings | None = None) -> Services:
         f"verify problems: {problems}."
     )
     print(f"Evidence chain valid: {svc.chain.verify_chain(flood.incident_id)}")
+
+    # Round 6: the territory changes and the field reports back.
+    from grid_triage.models import Alarm as _Alarm
+
+    note_update = svc.updates.post_update(
+        flood.incident_id, "crew_note", "crew.lee", "field_crew",
+        T0 + timedelta(minutes=47),
+        note="Tree on the line at REC-071; the section is earthed and tagged.",
+    )
+    print(
+        f"\nField update {note_update.update_id} recorded "
+        f"({note_update.kind} by {note_update.reported_by})."
+    )
+    sensor_update = svc.updates.post_update(
+        flood.incident_id, "alarm_observation", "crew.lee", "field_crew",
+        T0 + timedelta(minutes=47),
+        alarm=_Alarm(
+            alarm_id="ALM-UPD-001", stream_id="STREAM-SCADA-NORTH",
+            device_id="SEN-0723", feeder_id="FDR-07",
+            kind="line_sensor_fault", severity="minor",
+            raised_at=T0 + timedelta(minutes=3),
+            message="New sensor LS23 reports a fault indication",
+        ),
+    )
+    print(
+        "Alarm from the new sensor SEN-0723 under the incident's pinned "
+        f"topology v1: {sensor_update.correlation['status']} — "
+        f"{sensor_update.correlation['reason']}"
+    )
+    declaration = svc.topology_acts.declare(
+        "v2", "op.dana", "operator",
+        T0 + timedelta(minutes=45), T0 + timedelta(minutes=46),
+    )
+    print(
+        f"Topology v2 declared effective by {declaration.declared_by} "
+        f"from {declaration.effective_at} — {len(declaration.change_set)} "
+        "changes on the record:"
+    )
+    for change in declaration.change_set:
+        print(f"  - {change['change']}: {change['detail']}")
+    revision = svc.revisions.recorrelate(
+        flood.incident_id, "op.dana", "operator", T0 + timedelta(minutes=50)
+    )
+    print(
+        f"Re-correlated as {revision.revised_incident_id} under v2: "
+        f"{len(revision.diff['alarms_removed'])} alarms leave with the "
+        f"split section {revision.diff['devices_removed']}, "
+        f"{revision.diff['alarms_added']} join, severity "
+        f"{revision.severity_change['prior_band']} "
+        f"({revision.severity_change['prior_score']}) → "
+        f"{revision.severity_change['revised_band']} "
+        f"({revision.severity_change['revised_score']}). The v1 incident "
+        "stands untouched."
+    )
 
     restored_at = T0 + timedelta(hours=4, minutes=30)  # 06:43 UTC
     closure, outcome, _record = svc.closure.close_incident(
