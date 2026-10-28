@@ -156,6 +156,37 @@ drafts the field and customer notifications as records marked
 unsent in their own text — the notify shape has no send surface
 anywhere in the package, and the eval gate scans for one.
 
+**Field updates arrive under the pinned topology; the territory
+changes by act, and re-correlation is a revision (R6).** A field
+update (`grid_triage/revisions.py`) is an insert-only artefact
+in a versioned pack's kind vocabulary — alarm observation, crew
+note, damage finding — naming its reporter and role. An update
+carrying a new alarm re-runs the correlation pack for that alarm
+against the incident's current members under the incident's
+*pinned* topology version, and the outcome is recorded on the
+update itself: joined with its rule, a named non-join, or
+`unresolvable_under_pinned_topology` when the alarm's device
+does not exist in the pinned version. The newer topology is
+never silently substituted — the update from the v2-only sensor
+SEN-0723 against the v1-pinned flood is the graded case.
+Topology v2 ships as data (`data/topology/v2.json`: a feeder
+split, a device added, a device replaced, a critical load
+added, the change set stated in the payload) and takes effect
+only through a **declaration act** — a named operator, a role,
+an effective time; before the act, or before its time, nothing
+migrates. **Re-correlation** is a second named act producing a
+new incident row under v2, linked to its predecessor by an
+`IncidentRevision` record: the diff (alarms/devices added and
+removed — membership follows the v2 device→feeder mapping, so
+the split section's 13 alarms leave the flood's group), the
+severity recomputed on *both* sides at the re-correlation
+instant (so the band change is the topology's doing, not the
+clock's; the moved formula inputs are named), and the ETR and
+classification artefacts on both sides linked by id. The prior
+incident's rows and artefacts are never written by any of this;
+supersession lives on the link record. An incident with a
+closure anywhere in its lineage is refused, naming the closure.
+
 ## Stores
 
 One store port, two dialects (`grid_triage/store.py`): SQLite

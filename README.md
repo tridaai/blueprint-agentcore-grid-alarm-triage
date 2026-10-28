@@ -224,6 +224,44 @@ programme.
   through draft → refused assignment → revision → assignment →
   refused self-approval → approval → drafted notifications.
 
+## What Round 6 builds
+
+- **Field updates** (`grid_triage/revisions.py`): crews and
+  dispatchers post updates against an incident — a new alarm
+  observation, a crew note, a damage finding — as insert-only
+  artefacts under a versioned update pack, each naming its
+  reporter and role. An update carrying a new alarm re-runs
+  correlation for that alarm under the incident's **pinned**
+  topology version, and the outcome is recorded on the update:
+  joined (with the rule that placed it) or a named non-join. An
+  alarm from a device that exists only in a newer topology is
+  `unresolvable_under_pinned_topology` — never silently
+  re-correlated under the newer version.
+- **Topology v2 as data + a declaration act**: v2 (a Feeder 7
+  split onto a new feeder FDR-07B, a new line sensor, a replaced
+  regulator, a new hospital load) ships as a version payload
+  with its change set stated in the data. It takes effect only
+  through a named operator's declaration act with an effective
+  time — there is no silent migration, and v1 stays fully
+  readable.
+- **Re-correlation is a revision, not an edit (Law 6)**: a
+  named operator's act re-correlates an open incident under v2,
+  producing a new incident linked by a revision record that
+  states the diff — alarms and devices added and removed
+  (membership follows the v2 device→feeder mapping, so the
+  split section leaves the flood's group: 13 alarms out, the
+  new sensor's alarm in), the severity recomputed on both sides
+  at the same instant with the moved formula inputs named
+  (the flood: SEV-1 85 → SEV-2 64), and the ETR estimates on
+  both sides linked by id. The prior incident's artefacts stay
+  byte-identical. Closed incidents are never re-correlated —
+  the refusal names the closure.
+- Migration 0006 (both dialects), and update / declaration /
+  re-correlation surfaces at parity across the operations API,
+  the Runtime invocation handler and the CLI. The demo now
+  walks the flood through a field update, the v2 declaration,
+  and its re-correlation diff.
+
 ## Quick start
 
 ```bash
@@ -258,10 +296,16 @@ What is built and what is not, plainly:
   the system drafts, assigns and records; only a named
   operator's approval act — role-checked, never the drafter of
   a human-touched version — moves a version to approved, and
-  the notifications it produces are drafts, never sent. Field
-  updates and re-correlation are Round 7, restoration
-  confirmation Round 8, storm mode Round 9. Nothing here
-  dispatches a crew in the world; it records who decided what.
+  the notifications it produces are drafts, never sent.
+  Restoration confirmation is the next round, storm mode the
+  one after. Nothing here dispatches a crew in the world; it
+  records who decided what.
+- **Field updates and re-correlation are Round 6**: updates
+  are recorded against incidents and correlated under the
+  pinned topology only; topology v2 is declared effective by
+  a named act, and re-correlation produces a linked revision
+  with a stated diff — the prior revision is never edited,
+  and closed incidents are never re-correlated.
 - **The AgentCore Policy pack is Round 11.** In R1, Law 1 (no
   control) is enforced by the tool catalogue's construction and
   the registry scan; the Cedar policy pack at the Gateway is the
@@ -289,10 +333,10 @@ src/grid_triage/   models, topology, correlation, services (ingest),
                    roster / etr / closure (R4), work_orders (R5),
                    runtime_app / runtime_main (AgentCore Runtime),
                    api, demo, cli, local_invoke, wiring, config
-data/topology/     versioned territory data (v1.json)
+data/topology/     versioned territory data (v1.json, v2.json)
 data/roster/       versioned crew roster artefact (v1.json)
 migrations/        numbered SQL migrations, sqlite + postgres trees
-tests/             pytest suite (126 tests through R5)
+tests/             pytest suite (140 tests through R6)
 evals/             the eval gate (run_evals.py)
 docs/              architecture.md — the honest AgentCore mapping
 ```
