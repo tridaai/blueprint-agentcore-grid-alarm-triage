@@ -19,9 +19,11 @@ deterministically so tests and evals grade against known truth:
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timedelta, timezone
 
-from grid_triage.models import Alarm
+from grid_triage.evidence import canonical_json
+from grid_triage.models import Alarm, MemoryRecord
 
 T0 = datetime(2026, 10, 14, 2, 13, 0, tzinfo=timezone.utc)
 
@@ -142,3 +144,102 @@ class ReferenceFeedAdapter:
 
     def fetch_alarms(self) -> list[Alarm]:
         return reference_feed()
+
+
+# ---------------------------------------------------------------------
+# Planted memory history (Round 3) — closed incidents from before
+# the live window, as memory records. Gold by construction: the
+# retrieval grading is hand-computed against these exact records.
+#
+# For the Feeder 7 flood (anchor BRK-070, class vegetation_contact,
+# member devices BRK-070/REC-071/SEC-072/SEC-073/XF-0721/XF-0731/
+# SEN-0722/SEN-0732), the retrieval weights give:
+#
+# - INC-HIST-0042 (Feeder 7, vegetation): class 4 + feeder 3 +
+#   device overlap 1 + shared terms {vegetation_contact, rec-071}
+#   2 = 10.
+# - INC-HIST-0057 (Feeder 7, equipment failure, same anchor
+#   device): feeder 3 + anchor device 2 + device overlap 1 +
+#   shared terms {sec-072} 1 = 7.
+# - INC-HIST-0063 (Feeder 12): no structural basis — not a prior
+#   for the flood at all.
+#
+# So the flood's priors are exactly [0042, 0057], in that order —
+# and the class weight is what puts 0042 first: without it, 0057's
+# anchor-device match would win.
+# ---------------------------------------------------------------------
+
+
+def _history_record(**fields) -> MemoryRecord:
+    body = {k: v for k, v in fields.items()}
+    for key in ("opened_at", "closed_at"):
+        body[key] = body[key].isoformat()
+    digest = hashlib.sha256(canonical_json(body)).hexdigest()
+    return MemoryRecord(record_id=f"MEM-{digest[:16]}", **fields)
+
+
+def history_records() -> list[MemoryRecord]:
+    return [
+        _history_record(
+            incident_id="INC-HIST-0042",
+            feeder_id="FDR-07",
+            substation_id="SUB-ALDER",
+            anchor_device_id="REC-071",
+            device_ids=["BRK-070", "REC-071", "SEC-072", "XF-0721"],
+            cause_class="vegetation_contact",
+            cause_rule_id="lockout_with_downstream_fault",
+            severity_band="SEV-2",
+            severity_score=52,
+            member_alarm_count=14,
+            customers_affected=1440,
+            resolution_summary=(
+                "Tree contact at REC-071 cleared by the vegetation crew; "
+                "feeder restored the same morning."
+            ),
+            opened_at=datetime(2026, 6, 18, 6, 12, tzinfo=timezone.utc),
+            closed_at=datetime(2026, 6, 18, 11, 40, tzinfo=timezone.utc),
+            topology_version="v1",
+        ),
+        _history_record(
+            incident_id="INC-HIST-0057",
+            feeder_id="FDR-07",
+            substation_id="SUB-ALDER",
+            anchor_device_id="BRK-070",
+            device_ids=["BRK-070", "SEC-072", "XF-0721"],
+            cause_class="equipment_failure",
+            cause_rule_id="thermal_without_lockout",
+            severity_band="SEV-3",
+            severity_score=33,
+            member_alarm_count=6,
+            customers_affected=760,
+            resolution_summary=(
+                "Sectionalizer SEC-072 replaced after insulation failure; "
+                "feeder restored."
+            ),
+            opened_at=datetime(2026, 8, 29, 15, 3, tzinfo=timezone.utc),
+            closed_at=datetime(2026, 8, 29, 19, 25, tzinfo=timezone.utc),
+            topology_version="v1",
+        ),
+        _history_record(
+            incident_id="INC-HIST-0063",
+            feeder_id="FDR-12",
+            substation_id="SUB-SOUTH",
+            anchor_device_id="REG-1202",
+            device_ids=["REG-1202", "RTU-120"],
+            cause_class="equipment_failure",
+            cause_rule_id="thermal_without_lockout",
+            severity_band="SEV-4",
+            severity_score=12,
+            member_alarm_count=3,
+            customers_affected=340,
+            resolution_summary=(
+                "Regulator REG-1202 tap mechanism repaired; voltage back in band."
+            ),
+            opened_at=datetime(2026, 9, 5, 9, 17, tzinfo=timezone.utc),
+            closed_at=datetime(2026, 9, 5, 12, 2, tzinfo=timezone.utc),
+            topology_version="v1",
+        ),
+    ]
+
+
+HISTORY_INCIDENTS = [r.incident_id for r in history_records()]
