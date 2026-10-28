@@ -103,6 +103,16 @@ TOOL_REGISTRY: list[ToolSpec] = [
         description="Read a storm window's post-storm review: the incidents the declaration stamped, their severity bands, closures and storm-only ETR accuracy, assembled from artefacts after stand-down (Round 8).",
     ),
     ToolSpec(
+        name="get_console_board",
+        shape=ToolShape.READ,
+        description="Read the operations board: open incidents by severity with their mode stamps, the feeder board, the ETR board with basis labels, the work-order queue, the storm banner and the latest shift handover — assembled only from artefacts of record (Round 9).",
+    ),
+    ToolSpec(
+        name="get_shift_handover",
+        shape=ToolShape.READ,
+        description="Read a shift handover artefact and its acceptance: the sections it froze from the record, the record hash the acceptance binds, and its staleness against the live record, named by the verifier (Round 9).",
+    ),
+    ToolSpec(
         name="assemble_incident_brief",
         shape=ToolShape.DRAFT,
         description="Draft the incident brief from correlated alarms, every statement cited.",

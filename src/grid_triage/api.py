@@ -17,8 +17,10 @@ operates anything (Law 1).
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from grid_triage import __version__
@@ -29,6 +31,7 @@ from grid_triage.agent import (
     PriorAttributionRefusal,
 )
 from grid_triage.closure import ClosureRefusal
+from grid_triage.handover import HandoverRefusal
 from grid_triage.models import Alarm
 from grid_triage.packs import PackRefusal
 from grid_triage.restoration import RestorationRefusal
@@ -1106,6 +1109,106 @@ def verify_storm_review(review_id: str) -> dict:
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"review_id": review_id, "problems": problems}
+
+
+# -- Round 9: the operator console and the shift handover -------
+
+
+@app.get("/console", response_class=HTMLResponse)
+def console_page() -> str:
+    """The single-file operator console. Static by construction:
+    it renders only what /console/data returns, and it carries
+    no mutation surface of any kind (Law 1)."""
+    return (
+        Path(__file__).resolve().parent / "static" / "console.html"
+    ).read_text(encoding="utf-8")
+
+
+@app.get("/console/data")
+def console_data() -> dict:
+    """The board payload: the operations board's computation at
+    this moment, plus the latest handover's view (its
+    acceptance and its staleness, computed live)."""
+    s = svc()
+    body = s.board.board(datetime.now(timezone.utc))
+    body["handover"] = s.handover.latest_view()
+    return body
+
+
+class AssembleHandoverRequest(BaseModel):
+    handed_over_by: str
+    role: str
+    handed_over_at: datetime | None = None
+
+
+@app.post("/handovers")
+def assemble_handover(request: AssembleHandoverRequest) -> dict:
+    s = svc()
+    try:
+        handover = s.handover.assemble(
+            request.handed_over_by,
+            request.role,
+            request.handed_over_at or datetime.now(timezone.utc),
+        )
+    except HandoverRefusal as exc:
+        raise HTTPException(
+            status_code=422, detail={"problems": exc.problems}
+        ) from exc
+    return s.handover.view(handover)
+
+
+@app.get("/handovers")
+def list_handovers() -> dict:
+    s = svc()
+    return {
+        "handovers": [s.handover.view(h) for h in s.handover.handovers()]
+    }
+
+
+@app.get("/handovers/{handover_id}")
+def get_handover(handover_id: str) -> dict:
+    s = svc()
+    handover = s.handover.get(handover_id)
+    if handover is None:
+        raise HTTPException(
+            status_code=404, detail=f"no such shift handover: {handover_id}"
+        )
+    return s.handover.view(handover)
+
+
+@app.get("/handovers/{handover_id}/verify")
+def verify_handover(handover_id: str) -> dict:
+    s = svc()
+    try:
+        problems = s.handover.verify(handover_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"handover_id": handover_id, "problems": problems}
+
+
+class AcceptHandoverRequest(BaseModel):
+    accepted_by: str
+    role: str
+    accepted_at: datetime | None = None
+
+
+@app.post("/handovers/{handover_id}/accept")
+def accept_handover(handover_id: str, request: AcceptHandoverRequest) -> dict:
+    s = svc()
+    try:
+        acceptance = s.handover.accept(
+            handover_id,
+            request.accepted_by,
+            request.role,
+            request.accepted_at or datetime.now(timezone.utc),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except HandoverRefusal as exc:
+        raise HTTPException(
+            status_code=422, detail={"problems": exc.problems}
+        ) from exc
+    return acceptance.model_dump(mode="json")
 
 
 @app.get("/topology/versions")

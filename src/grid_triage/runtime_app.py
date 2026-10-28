@@ -62,6 +62,14 @@ payload names one piece of triage work:
   named operator acts (declaring operates nothing — it states
   an operating mode, recorded with its reason and scope), the
   state fold read, and the post-storm review.
+- ``{"action": "get_console_board" | "assemble_handover" |
+  "get_handover" | "list_handovers" | "verify_handover" |
+  "accept_handover", ...}`` — the Round 9 operations board
+  read (the console's computation) and the shift handover
+  acts: assembly freezes the room's state into an artefact
+  from artefacts of record; acceptance is the incoming
+  operator's act bound to its record hash, refused when the
+  record has moved. Neither operates anything.
 
 The Runtime session id (``context.session_id``) maps to one
 triage session and is carried into the logs. All domain work
@@ -83,6 +91,7 @@ from grid_triage.agent import (
     PriorAttributionRefusal,
 )
 from grid_triage.closure import ClosureRefusal
+from grid_triage.handover import HandoverRefusal
 from grid_triage.models import Alarm
 from grid_triage.packs import PackRefusal
 from grid_triage.restoration import RestorationRefusal
@@ -831,6 +840,80 @@ def handle_invocation(payload: dict, session_id: str | None = None) -> dict:
             "status": "ok",
             "review_id": payload.get("review_id"),
             "problems": problems,
+        }
+    if action == "get_console_board":
+        body = svc.board.board(now)
+        body["handover"] = svc.handover.latest_view()
+        return {"status": "ok", "board": body}
+    if action == "assemble_handover":
+        handed_over_at = now
+        if payload.get("handed_over_at"):
+            handed_over_at = datetime.fromisoformat(payload["handed_over_at"])
+        try:
+            handover = svc.handover.assemble(
+                payload.get("handed_over_by", ""),
+                payload.get("role", ""),
+                handed_over_at,
+            )
+        except HandoverRefusal as exc:
+            return {"status": "refused", "problems": exc.problems}
+        return {
+            "status": "assembled",
+            "handover": svc.handover.view(handover),
+        }
+    if action == "get_handover":
+        handover = svc.handover.get(payload.get("handover_id", ""))
+        if handover is None:
+            return {
+                "status": "no_such_handover",
+                "handover_id": payload.get("handover_id"),
+            }
+        return {"status": "ok", "handover": svc.handover.view(handover)}
+    if action == "list_handovers":
+        return {
+            "status": "ok",
+            "handovers": [
+                svc.handover.view(h) for h in svc.handover.handovers()
+            ],
+        }
+    if action == "verify_handover":
+        try:
+            problems = svc.handover.verify(payload.get("handover_id", ""))
+        except KeyError:
+            return {
+                "status": "no_such_handover",
+                "handover_id": payload.get("handover_id"),
+            }
+        return {
+            "status": "ok",
+            "handover_id": payload.get("handover_id"),
+            "problems": problems,
+        }
+    if action == "accept_handover":
+        accepted_at = now
+        if payload.get("accepted_at"):
+            accepted_at = datetime.fromisoformat(payload["accepted_at"])
+        try:
+            acceptance = svc.handover.accept(
+                payload.get("handover_id", ""),
+                payload.get("accepted_by", ""),
+                payload.get("role", ""),
+                accepted_at,
+            )
+        except KeyError:
+            return {
+                "status": "no_such_handover",
+                "handover_id": payload.get("handover_id"),
+            }
+        except HandoverRefusal as exc:
+            return {
+                "status": "refused",
+                "handover_id": payload.get("handover_id"),
+                "problems": exc.problems,
+            }
+        return {
+            "status": "accepted",
+            "acceptance": acceptance.model_dump(mode="json"),
         }
     if action == "ingest_and_brief":
         alarms = [Alarm.model_validate(a) for a in payload.get("alarms", [])]

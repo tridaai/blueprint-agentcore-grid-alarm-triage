@@ -11,6 +11,7 @@ import json
 from datetime import datetime, timezone
 
 from grid_triage.closure import ClosureRefusal
+from grid_triage.handover import HandoverRefusal
 from grid_triage.models import Alarm
 from grid_triage.packs import PackRefusal
 from grid_triage.restoration import RestorationRefusal
@@ -198,6 +199,19 @@ def main(argv: list[str] | None = None) -> int:
     p_srev.add_argument("--at", default=None, help="ISO timestamp; default: now")
     p_srevv = sub.add_parser("storm-review-verify")
     p_srevv.add_argument("review_id")
+    sub.add_parser("console-board")
+    p_ho = sub.add_parser("handover")
+    p_ho.add_argument("--by", required=True, help="the operator handing over")
+    p_ho.add_argument("--role", required=True, help="the handing-over operator's role")
+    p_ho.add_argument("--at", default=None, help="ISO timestamp; default: now")
+    sub.add_parser("handovers")
+    p_hov = sub.add_parser("handover-verify")
+    p_hov.add_argument("handover_id")
+    p_hoa = sub.add_parser("handover-accept")
+    p_hoa.add_argument("handover_id")
+    p_hoa.add_argument("--by", required=True, help="the incoming operator accepting")
+    p_hoa.add_argument("--role", required=True, help="the accepting operator's role")
+    p_hoa.add_argument("--at", default=None, help="ISO timestamp; default: now")
     args = parser.parse_args(argv)
 
     svc = build_services()
@@ -813,6 +827,55 @@ def main(argv: list[str] | None = None) -> int:
         ))
         if problems:
             return 1
+    elif args.command == "console-board":
+        body = svc.board.board(datetime.now(timezone.utc))
+        body["handover"] = svc.handover.latest_view()
+        print(json.dumps(body, indent=2))
+    elif args.command == "handover":
+        handed_over_at = (
+            datetime.fromisoformat(args.at)
+            if args.at
+            else datetime.now(timezone.utc)
+        )
+        try:
+            handover = svc.handover.assemble(args.by, args.role, handed_over_at)
+        except HandoverRefusal as exc:
+            print("refused: " + "; ".join(exc.problems))
+            return 1
+        print(json.dumps(svc.handover.view(handover), indent=2))
+    elif args.command == "handovers":
+        print(json.dumps(
+            [svc.handover.view(h) for h in svc.handover.handovers()],
+            indent=2,
+        ))
+    elif args.command == "handover-verify":
+        try:
+            problems = svc.handover.verify(args.handover_id)
+        except KeyError:
+            print(f"no such shift handover: {args.handover_id}")
+            return 1
+        print(json.dumps(
+            {"handover_id": args.handover_id, "problems": problems}, indent=2
+        ))
+        if problems:
+            return 1
+    elif args.command == "handover-accept":
+        accepted_at = (
+            datetime.fromisoformat(args.at)
+            if args.at
+            else datetime.now(timezone.utc)
+        )
+        try:
+            acceptance = svc.handover.accept(
+                args.handover_id, args.by, args.role, accepted_at
+            )
+        except KeyError:
+            print(f"no such shift handover: {args.handover_id}")
+            return 1
+        except HandoverRefusal as exc:
+            print("refused: " + "; ".join(exc.problems))
+            return 1
+        print(json.dumps(acceptance.model_dump(mode="json"), indent=2))
     return 0
 
 

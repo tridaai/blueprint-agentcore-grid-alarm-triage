@@ -10,11 +10,13 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from grid_triage.agent import IncidentAssembler, model_for_profile
+from grid_triage.board import BoardService
 from grid_triage.cause import CauseService
 from grid_triage.closure import ClosureService
 from grid_triage.config import Settings
 from grid_triage.etr import EtrService
 from grid_triage.evidence import EvidenceChain
+from grid_triage.handover import HandoverService
 from grid_triage.memory import LocalMemoryDouble, MemoryService
 from grid_triage.object_store import LocalObjectStore
 from grid_triage.packs import EvidencePackService
@@ -103,6 +105,19 @@ class Services:
         )
         self.updates.post_close_handler = self.restoration.handle_post_close_alarm
         self.event_log = EventLogService(self.store, self.chain)
+        # Round 9: the operations board (the one artefact-only
+        # computation behind the console) and the shift handover
+        # acts that freeze it. Both are read/act surfaces over
+        # the same store — neither operates anything.
+        self.board = BoardService(
+            self.store,
+            self.work_orders,
+            self.etr,
+            self.storm,
+            self.closure,
+            payload,
+        )
+        self.handover = HandoverService(self.store, self.board)
         self.assembler = IncidentAssembler(
             self.store,
             self.chain,
