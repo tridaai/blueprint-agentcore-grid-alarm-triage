@@ -325,6 +325,62 @@ programme.
   next-morning incident, closes the restored part, and raises
   a post-close contradiction on the closed flood.
 
+## What Round 8 builds
+
+- **Storm mode is a declared state, never an automatic one**
+  (`grid_triage/storm.py`). The design's Law 8 imagined the
+  system declaring storm mode above a computed incident-rate
+  threshold; this round keeps the declared state and drops the
+  automation — alarm volume alone never flips anything. Storm
+  mode exists only as named operator acts: **declare** opens a
+  window with its operator, stated reason and scope (a feeder
+  list, or the whole territory), **extend** re-states the scope
+  from that moment on, and **stand-down** closes the window.
+  The acts are insert-only, content-addressed and linked into a
+  chain per window; the state at any moment is the fold of those
+  acts, and a state read names the act that put it there.
+- **What the mode changes is stated once, in the storm pack**,
+  with normal and storm values side by side — and nothing
+  changes that the pack does not name: the correlation window
+  widens 600s → 1800s; `meter_ping_failure`, excluded in normal
+  mode, may *join* a storm incident (AMI silence during a storm
+  is outage evidence) though it still never anchors one;
+  severity's duration terms slow (30 → 60 minutes per point,
+  cap 10 → 6) and its breadth terms count for more (10 → 5
+  alarms per point, cap 5 → 8); an ETR's base repair minutes
+  scale by 6/5.
+- **The stamp is on the incident's face, and it is permanent.**
+  An incident correlated while a declaration covers its feeder
+  carries the mode, the storm pack version and the declaration
+  id, judged at its anchor alarm's own time. Its severity
+  assessment records the mode and the pack's stated adjustments
+  in its inputs; its ETR carries the added minutes as their own
+  `storm_conditions` component line, never folded silently into
+  the repair line. Standing the storm down relabels nothing:
+  incidents, work and estimates created under the window stay
+  exactly as created, and revisions, split parts and post-close
+  incidents are stamped at the act that creates them.
+- **Storm accuracy is reported separately, never blended.**
+  Every ETR outcome records its incident's operating mode, and
+  the accuracy ledger's `by_operating_mode` rows compute the
+  storm record from storm outcomes only — the rows sum to the
+  overall figures exactly, so the separation is itself
+  checkable.
+- **The post-storm review** is computed only after stand-down,
+  assembled only from artefacts — the window's stamped
+  incidents, their current severity bands, their closures and
+  ETR outcomes — and re-performs exactly under its verifier; a
+  recomputation over a moved record supersedes by link.
+- **Law 1 is untouched**: storm mode adds no tool that operates
+  anything — two read tools (`get_storm_state`,
+  `get_storm_review`) join the registry, and notifications
+  remain drafts. Migration 0008 (both dialects) and surfaces at
+  parity across the operations API, the Runtime invocation
+  handler and the CLI. The demo closes with a declared storm
+  over the Feeder 7 burst: widened grouping, the storm ETR and
+  severity, a refused early review, stand-down, and the
+  verified post-storm review.
+
 ## Quick start
 
 ```bash
@@ -376,7 +432,17 @@ What is built and what is not, plainly:
   Signals arrive through a recording port with planted local
   readings — no live meter/OMS system is connected, and a
   confirmation is only ever as good as the signals recorded
-  against it. Storm mode remains a later round.
+  against it.
+- **Storm mode is declared, never automatic (Round 8)**: the
+  declaration acts are the whole mechanism — there is no
+  incident-rate threshold anywhere in the codebase that enters
+  storm mode, and none is planned; the design brief's Law 8
+  threshold wording is deliberately not implemented, because a
+  mode that changes correlation, severity and ETR arithmetic
+  should begin with a named human's recorded decision. What
+  the mode changes is bounded by the storm pack; storm
+  reporting cadence and customer communications are later
+  rounds.
 - **The AgentCore Policy pack is Round 11.** In R1, Law 1 (no
   control) is enforced by the tool catalogue's construction and
   the registry scan; the Cedar policy pack at the Gateway is the
@@ -402,13 +468,13 @@ src/grid_triage/   models, topology, correlation, services (ingest),
                    evidence, store, agent, tools (Law 1 registry),
                    severity (R2), cause / memory / packs (R3),
                    roster / etr / closure (R4), work_orders (R5),
-                   revisions (R6), restoration (R7),
+                   revisions (R6), restoration (R7), storm (R8),
                    runtime_app / runtime_main (AgentCore Runtime),
                    api, demo, cli, local_invoke, wiring, config
 data/topology/     versioned territory data (v1.json, v2.json)
 data/roster/       versioned crew roster artefact (v1.json)
 migrations/        numbered SQL migrations, sqlite + postgres trees
-tests/             pytest suite (161 tests through R7)
+tests/             pytest suite (189 tests through R8)
 evals/             the eval gate (run_evals.py)
 docs/              architecture.md — the honest AgentCore mapping
 ```

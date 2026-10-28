@@ -238,6 +238,50 @@ export against the store — a line that names no artefact, or
 the wrong timestamp, and an artefact missing from the export
 are both named as problems.
 
+**Storm mode is a declared state (R8).** On a major-event day
+the operating parameters change — and the change is itself an
+act in the record (`grid_triage/storm.py`). A **storm
+declaration** is a named operator's insert-only act — declare,
+extend or stand-down — stating its operator, role, reason and
+scope (a feeder list; empty means the whole territory). The
+state of any feeder at any moment is the *fold* of the acts:
+the latest act in record order at or before that moment whose
+scope covers the feeder decides, and a state read names the
+declare act, the head act and the pack version behind it.
+Nothing computes an entry into storm mode: the design brief's
+Law 8 threshold wording is deliberately not implemented,
+because a mode that changes judgement arithmetic should begin
+with a recorded human decision, not a tripwire. A **storm
+pack** states every parameter the mode changes with its
+normal and storm values side by side — the correlation window
+(600s → 1800s), the excluded kind that becomes joinable
+(`meter_ping_failure`, join-only), severity's duration and
+breadth terms, and the ETR base-repair factor — and the
+engines apply exactly the pack and nothing else: correlation
+reads its window from the mode in force at the incident's
+*anchor alarm time* (a burst raised before the declaration
+correlates narrow and normal even when it is correlated
+afterwards), severity merges the pack's four named overrides
+into its own pack, and ETR scales the base repair line and
+adds the difference as its own `storm_conditions` component,
+labelled with the factor, the pack version and the
+declaration id. The resulting **stamp** — operating mode, pack
+version, declaration id — is recorded on the incident row,
+the severity assessment's inputs, the ETR estimate and the
+ETR outcome, so storm performance reads out of the accuracy
+ledger in its own row, provably summing with the normal row
+to the overall figures. Stand-down closes the window from its
+moment and rewrites nothing: later creations are stamped at
+their own acts' times. The **post-storm review** is computed
+only over a closed window, only from artefacts — the stamped
+incident set, their current bands, their closures and
+outcomes — and its verifier re-performs the window times,
+scope, set and figures exactly, naming drift; a recomputation
+over a moved record supersedes by link rather than editing in
+place. Storm mode adds no surface that operates anything: the
+new tools are two reads, and Law 1's registry scan still
+grades the whole catalogue.
+
 ## Stores
 
 One store port, two dialects (`grid_triage/store.py`): SQLite
