@@ -24,6 +24,7 @@ from grid_triage.services import CorrelationService, IngestService
 from grid_triage.severity import SeverityService
 from grid_triage.store import SqlStore
 from grid_triage.topology import TopologyView, load_topology_file
+from grid_triage.work_orders import WorkOrderService
 
 
 class Services:
@@ -59,6 +60,9 @@ class Services:
         # like the topology (Round 4).
         self.roster = RosterView(load_roster_file(settings.roster_version))
         self.etr = EtrService(self.store, self.chain, self.cause, self.roster)
+        self.work_orders = WorkOrderService(
+            self.store, self.chain, self.cause, self.etr, self.roster
+        )
         self.closure = ClosureService(self.store, self.chain, self.memory)
         self.assembler = IncidentAssembler(
             self.store,

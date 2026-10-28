@@ -58,9 +58,24 @@ TOOL_REGISTRY: list[ToolSpec] = [
         description="List severity assessments still awaiting a required operator acknowledgement (Round 2).",
     ),
     ToolSpec(
+        name="get_work_order",
+        shape=ToolShape.READ,
+        description="Read an incident's current work-order draft with its derived state, assignment and decision (Round 5).",
+    ),
+    ToolSpec(
+        name="list_work_orders",
+        shape=ToolShape.READ,
+        description="List work-order versions and their derived states, optionally filtered by state (Round 5).",
+    ),
+    ToolSpec(
         name="assemble_incident_brief",
         shape=ToolShape.DRAFT,
         description="Draft the incident brief from correlated alarms, every statement cited.",
+    ),
+    ToolSpec(
+        name="draft_work_order",
+        shape=ToolShape.DRAFT,
+        description="Draft a work order for an incident from the classification, topology and ETR of record — a draft only; a named operator's act approves it (Round 5).",
     ),
     ToolSpec(
         name="notify_operator",
