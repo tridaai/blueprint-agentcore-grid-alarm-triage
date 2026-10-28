@@ -29,6 +29,8 @@ from grid_triage.models import (
     IncidentMembership,
     IncidentStatus,
     Notification,
+    SeverityAcknowledgement,
+    SeverityAssessment,
 )
 
 
@@ -52,6 +54,14 @@ class Store(Protocol):
     def list_briefs(self, incident_id: str) -> list[IncidentBrief]: ...
     def add_notification(self, notification: Notification) -> None: ...
     def list_notifications(self, incident_id: str) -> list[Notification]: ...
+    # severity (Round 2: assessments are append-only, supersede by link)
+    def add_severity_assessment(self, assessment: SeverityAssessment) -> None: ...
+    def get_severity_assessment(self, assessment_id: str) -> SeverityAssessment | None: ...
+    def list_severity_assessments(self, incident_id: str) -> list[SeverityAssessment]: ...
+    def add_severity_acknowledgement(self, ack: SeverityAcknowledgement) -> None: ...
+    def list_severity_acknowledgements(
+        self, incident_id: str | None = None
+    ) -> list[SeverityAcknowledgement]: ...
     # topology index
     def load_topology(self, payload: dict, loaded_at: datetime) -> None: ...
     def get_topology_payload(self, version: str) -> dict | None: ...
@@ -334,6 +344,85 @@ class SqlStore:
             for r in rows
         ]
 
+    # -- severity (Round 2) --------------------------------------------
+    def add_severity_assessment(self, assessment: SeverityAssessment) -> None:
+        row = self._run(
+            "SELECT COALESCE(MAX(assessed_seq), 0) FROM severity_assessments",
+            fetch="one",
+        )
+        seq = int(row[0]) + 1
+        self._run(
+            "INSERT INTO severity_assessments (assessment_id, incident_id, assessed_seq, payload)"
+            " VALUES (?,?,?,?)",
+            (
+                assessment.assessment_id,
+                assessment.incident_id,
+                seq,
+                assessment.model_dump_json(),
+            ),
+        )
+
+    def get_severity_assessment(self, assessment_id: str) -> SeverityAssessment | None:
+        row = self._run(
+            "SELECT payload FROM severity_assessments WHERE assessment_id = ?",
+            (assessment_id,),
+            fetch="one",
+        )
+        return SeverityAssessment.model_validate(json.loads(row[0])) if row else None
+
+    def list_severity_assessments(self, incident_id: str) -> list[SeverityAssessment]:
+        rows = self._run(
+            "SELECT payload FROM severity_assessments WHERE incident_id = ?"
+            " ORDER BY assessed_seq",
+            (incident_id,),
+            fetch="all",
+        )
+        return [SeverityAssessment.model_validate(json.loads(r[0])) for r in rows]
+
+    def add_severity_acknowledgement(self, ack: SeverityAcknowledgement) -> None:
+        self._run(
+            "INSERT INTO severity_acknowledgements"
+            " (ack_id, assessment_id, incident_id, acknowledged_by, role, acknowledged_at)"
+            " VALUES (?,?,?,?,?,?)",
+            (
+                ack.ack_id,
+                ack.assessment_id,
+                ack.incident_id,
+                ack.acknowledged_by,
+                ack.role,
+                ack.acknowledged_at.isoformat(),
+            ),
+        )
+
+    def list_severity_acknowledgements(
+        self, incident_id: str | None = None
+    ) -> list[SeverityAcknowledgement]:
+        if incident_id is None:
+            rows = self._run(
+                "SELECT ack_id, assessment_id, incident_id, acknowledged_by, role,"
+                " acknowledged_at FROM severity_acknowledgements ORDER BY ack_id",
+                fetch="all",
+            )
+        else:
+            rows = self._run(
+                "SELECT ack_id, assessment_id, incident_id, acknowledged_by, role,"
+                " acknowledged_at FROM severity_acknowledgements"
+                " WHERE incident_id = ? ORDER BY ack_id",
+                (incident_id,),
+                fetch="all",
+            )
+        return [
+            SeverityAcknowledgement(
+                ack_id=r[0],
+                assessment_id=r[1],
+                incident_id=r[2],
+                acknowledged_by=r[3],
+                role=r[4],
+                acknowledged_at=datetime.fromisoformat(r[5]),
+            )
+            for r in rows
+        ]
+
     # -- topology index ------------------------------------------------
     def load_topology(self, payload: dict, loaded_at: datetime) -> None:
         version = payload["version"]
@@ -360,8 +449,8 @@ class SqlStore:
             )
         for d in payload["devices"]:
             self._run(
-                "INSERT INTO topology_devices (version, device_id, feeder_id, parent_device_id, kind, name)"
-                " VALUES (?,?,?,?,?,?)",
+                "INSERT INTO topology_devices (version, device_id, feeder_id, parent_device_id, kind, name, customers)"
+                " VALUES (?,?,?,?,?,?,?)",
                 (
                     version,
                     d["device_id"],
@@ -369,13 +458,21 @@ class SqlStore:
                     d.get("parent_device_id"),
                     d["kind"],
                     d["name"],
+                    d.get("customers"),
                 ),
             )
         for load in payload.get("critical_loads", []):
             self._run(
-                "INSERT INTO topology_critical_loads (version, load_id, feeder_id, kind, name)"
-                " VALUES (?,?,?,?,?)",
-                (version, load["load_id"], load["feeder_id"], load["kind"], load["name"]),
+                "INSERT INTO topology_critical_loads (version, load_id, feeder_id, kind, name, device_id)"
+                " VALUES (?,?,?,?,?,?)",
+                (
+                    version,
+                    load["load_id"],
+                    load["feeder_id"],
+                    load["kind"],
+                    load["name"],
+                    load.get("device_id"),
+                ),
             )
 
     def get_topology_payload(self, version: str) -> dict | None:
@@ -394,7 +491,7 @@ class SqlStore:
 
     def list_devices(self, version: str) -> list[dict]:
         rows = self._run(
-            "SELECT device_id, feeder_id, parent_device_id, kind, name"
+            "SELECT device_id, feeder_id, parent_device_id, kind, name, customers"
             " FROM topology_devices WHERE version = ? ORDER BY device_id",
             (version,),
             fetch="all",
@@ -406,6 +503,7 @@ class SqlStore:
                 "parent_device_id": r[2],
                 "kind": r[3],
                 "name": r[4],
+                "customers": r[5],
             }
             for r in rows
         ]

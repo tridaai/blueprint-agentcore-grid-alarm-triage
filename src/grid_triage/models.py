@@ -83,6 +83,48 @@ class EvidenceItem(BaseModel):
     recorded_on: datetime
 
 
+class SeverityAssessment(BaseModel):
+    """One severity computation for one incident (Round 2, Law 3).
+
+    Content-addressed: ``assessment_id`` is a hash of everything
+    below except the id itself, so the same inputs at the same
+    ``as_of`` always name the same assessment. Assessments are
+    never edited — a recomputation is a new assessment whose
+    ``supersedes`` links to the one it replaces. Every input and
+    every weight the formula applied is recorded in ``inputs``;
+    an input the data cannot supply is named in ``missing_inputs``
+    and the band is ``UNRATED`` — never guessed, never zero-filled.
+    """
+
+    assessment_id: str
+    incident_id: str
+    as_of: datetime
+    topology_version: str
+    pack_version: str
+    supersedes: str | None = None
+    inputs: dict = Field(default_factory=dict)
+    score: int | None = None
+    band: str
+    missing_inputs: list[str] = Field(default_factory=list)
+    escalation_required: bool = False
+    ack_roles: list[str] = Field(default_factory=list)
+
+
+class SeverityAcknowledgement(BaseModel):
+    """A named operator's acknowledgement of one assessment whose
+    band crossed an escalation threshold (Round 2). A recorded act
+    with a role — the requirement, the queue and this act are all
+    Round 2 builds; the work-order approval gate itself is Round 6.
+    """
+
+    ack_id: str
+    assessment_id: str
+    incident_id: str
+    acknowledged_by: str
+    role: str
+    acknowledged_at: datetime
+
+
 class Notification(BaseModel):
     """A recorded notification (Law: notify is a tool shape). In R1
     the notification is recorded against the incident; no real

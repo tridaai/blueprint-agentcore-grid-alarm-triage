@@ -87,3 +87,44 @@ class TopologyView:
         """True when a and b are the same device or in an
         ancestor/descendant relation."""
         return a == b or b in self.ancestors(a) or b in self.descendants(a)
+
+    def outage_slice(self, anchor_device_id: str) -> set[str] | None:
+        """The de-energised slice when ``anchor_device_id`` opens:
+        the device itself plus everything downstream of it. None
+        when the device is not in this topology version — the
+        caller must treat the slice as unknown, never as empty."""
+        if anchor_device_id not in self.devices:
+            return None
+        return {anchor_device_id} | self.descendants(anchor_device_id)
+
+    def customers_in(self, device_ids: set[str]) -> int | None:
+        """Total customers served from ``device_ids`` (customer
+        counts are topology data, carried per device). None when
+        any device in the slice carries no count — an unknown is
+        named by the caller, never zero-filled."""
+        total = 0
+        for device_id in device_ids:
+            device = self.devices.get(device_id)
+            if device is None or device.get("customers") is None:
+                return None
+            total += int(device["customers"])
+        return total
+
+    def critical_loads_in(self, device_ids: set[str]) -> list[dict] | None:
+        """Critical loads served from a device in the slice. None
+        when a load on an involved feeder carries no serving device
+        in this version — its affected state is then unprovable,
+        and the caller names it as a missing input rather than
+        assuming either way."""
+        feeders = {
+            self.devices[d]["feeder_id"] for d in device_ids if d in self.devices
+        }
+        affected: list[dict] = []
+        for load in self.critical_loads:
+            if load["feeder_id"] not in feeders:
+                continue
+            if load.get("device_id") is None:
+                return None
+            if load["device_id"] in device_ids:
+                affected.append(load)
+        return affected
