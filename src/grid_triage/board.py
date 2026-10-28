@@ -226,9 +226,14 @@ def unconfirmed_restoration_rows(store) -> list[dict]:
 def storm_section(storm: StormService, at: datetime) -> dict:
     """The storm state at ``at``, folded from the declaration
     acts — the banner the console shows and the section the
-    handover carries."""
+    handover carries. The moment itself is not part of the
+    returned section: a handover's sections hash over the
+    record's figures alone, so an unchanged record re-assembles
+    to the standing artefact whatever the clock says. The fold
+    moment lives on the handover artefact (handed_over_at) and
+    on the board's generated_at."""
     windows = storm.active_windows(at)
-    return {"active": bool(windows), "at": at.isoformat(), "windows": windows}
+    return {"active": bool(windows), "windows": windows}
 
 
 class BoardService:
