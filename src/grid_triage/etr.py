@@ -40,6 +40,7 @@ from grid_triage.cause import UNKNOWN, CauseService
 from grid_triage.evidence import EvidenceChain, canonical_json
 from grid_triage.models import Alarm, CauseClassification, EtrEstimate, Incident
 from grid_triage.roster import RosterView
+from grid_triage.storm import STORM_PACK, storm_base_repair
 from grid_triage.topology import TopologyView
 
 ETR_PACK = {
@@ -112,9 +113,17 @@ def compute_estimate(
     pack: dict = ETR_PACK,
     supersedes: str | None = None,
     prior: EtrEstimate | None = None,
+    storm: dict | None = None,
+    storm_pack: dict = STORM_PACK,
 ) -> EtrEstimate:
     """Pure ETR computation. Every input the formula needs is
-    either used and recorded, or named in ``missing_inputs``."""
+    either used and recorded, or named in ``missing_inputs``.
+
+    ``storm`` — for an incident stamped storm (Round 8) — is the
+    stamp context ``{"pack_version", "declaration_id"}``: the
+    base repair minutes scale by the storm pack's stated factor
+    and the added minutes land as their own component line, so
+    the estimate is labelled with the mode on its face."""
     missing: list[str] = []
 
     cause_class = classification.cause_class if classification else None
@@ -232,6 +241,22 @@ def compute_estimate(
             },
         ]
         total = wait + travel + base
+        if storm:
+            storm_base = storm_base_repair(base, storm_pack)
+            components.append(
+                {
+                    "name": storm_pack["etr"]["component_name"],
+                    "minutes": storm_base - base,
+                    "detail": {
+                        "base_repair_minutes": base,
+                        "storm_base_repair_minutes": storm_base,
+                        "factor": storm_pack["etr"]["base_repair_factor"],
+                        "storm_pack_version": storm["pack_version"],
+                        "storm_declaration_id": storm["declaration_id"],
+                    },
+                }
+            )
+            total += storm_base - base
         restored_at = as_of + timedelta(minutes=total)
         duration = _minutes(restored_at - anchor.raised_at)
         status = COMPUTED
@@ -242,6 +267,9 @@ def compute_estimate(
         "as_of": as_of.isoformat(),
         "rate_pack_version": pack["version"],
         "roster_version": roster.version if roster else "",
+        "operating_mode": "storm" if storm else "normal",
+        "storm_pack_version": storm["pack_version"] if storm else None,
+        "storm_declaration_id": storm["declaration_id"] if storm else None,
         "classification_id": inputs["classification_id"],
         "supersedes": supersedes,
         "status": status,
@@ -314,12 +342,16 @@ class EtrService:
         cause: CauseService,
         roster: RosterView | None,
         pack: dict = ETR_PACK,
+        storm_pack: dict = STORM_PACK,
     ):
         self.store = store
         self.chain = chain
         self.cause = cause
         self.roster = roster
         self.pack = pack
+        # Round 8: the storm pack whose stated ETR factor applies
+        # to incidents stamped storm.
+        self.storm_pack = storm_pack
 
     def _topology_for(self, incident: Incident) -> TopologyView | None:
         payload = self.store.get_topology_payload(incident.topology_version)
@@ -339,6 +371,12 @@ class EtrService:
         classification = self.cause.classify(incident_id, as_of)
         anchor = self.store.get_alarm(incident.anchor_alarm_id)
         prior = self.current(incident_id)
+        storm: dict | None = None
+        if incident.operating_mode == "storm":
+            storm = {
+                "pack_version": incident.storm_pack_version,
+                "declaration_id": incident.storm_declaration_id,
+            }
         candidate = compute_estimate(
             incident,
             anchor,
@@ -349,6 +387,8 @@ class EtrService:
             pack=self.pack,
             supersedes=prior.estimate_id if prior else None,
             prior=prior,
+            storm=storm,
+            storm_pack=self.storm_pack,
         )
         if prior is not None:
             # Identical recomputation against the same head: a

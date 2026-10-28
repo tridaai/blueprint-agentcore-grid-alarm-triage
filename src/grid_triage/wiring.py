@@ -50,7 +50,9 @@ class Services:
         # before the consumers that read the fold.
         self.storm = StormService(self.store)
         self.intake = IngestService(self.store)
-        self.correlator = CorrelationService(self.store, self.chain)
+        self.correlator = CorrelationService(
+            self.store, self.chain, storm=self.storm
+        )
         self.feed = ReferenceFeedAdapter()
         self.severity = SeverityService(self.store, self.chain)
         self.cause = CauseService(self.store, self.chain)
@@ -82,6 +84,7 @@ class Services:
             self.severity,
             self.etr,
             self.topology_acts,
+            storm=self.storm,
         )
         # Round 7: restoration signals and confirmations, the
         # gated close, splits, post-close contradictions and the
@@ -96,6 +99,7 @@ class Services:
             self.severity,
             cause=self.cause,
             etr=self.etr,
+            storm=self.storm,
         )
         self.updates.post_close_handler = self.restoration.handle_post_close_alarm
         self.event_log = EventLogService(self.store, self.chain)

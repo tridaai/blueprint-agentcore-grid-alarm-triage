@@ -42,6 +42,7 @@ from grid_triage.models import (
     SeverityAcknowledgement,
     SeverityAssessment,
 )
+from grid_triage.storm import STORM_PACK, severity_adjustments, storm_severity_pack
 from grid_triage.topology import TopologyView
 
 SEVERITY_PACK = {
@@ -94,10 +95,18 @@ def compute_assessment(
     as_of: datetime,
     pack: dict = SEVERITY_PACK,
     supersedes: str | None = None,
+    storm: dict | None = None,
 ) -> SeverityAssessment:
     """Pure severity computation. ``topology`` is the view of the
     incident's pinned topology version, or None when that version
-    is not loaded — the affected inputs are then named missing."""
+    is not loaded — the affected inputs are then named missing.
+
+    ``storm`` — for an incident stamped storm (Round 8) — is the
+    stamp context ``{"pack_version", "declaration_id",
+    "adjustments"}``; the caller passes the storm-merged pack
+    as ``pack``, and the assessment's inputs record the mode,
+    the declaration and the pack's stated adjustments, so the
+    storm computation is labelled on its face."""
     missing: list[str] = []
     anchor = alarms_by_id.get(incident.anchor_alarm_id)
 
@@ -184,6 +193,13 @@ def compute_assessment(
         "duration_minutes": duration_minutes,
         "member_alarm_count": member_count,
         "points": terms,
+        # Round 8: the operating mode is on every assessment's
+        # face. A storm assessment also names the declaration it
+        # rests on and the pack's stated parameter adjustments.
+        "operating_mode": "storm" if storm else "normal",
+        "storm_pack_version": storm["pack_version"] if storm else None,
+        "storm_declaration_id": storm["declaration_id"] if storm else None,
+        "storm_adjustments": storm["adjustments"] if storm else None,
     }
     body = {
         "incident_id": incident.incident_id,
@@ -214,10 +230,20 @@ class SeverityService:
     the assessment on the incident's evidence chain), read current
     and history, and the acknowledgement queue and act."""
 
-    def __init__(self, store, chain: EvidenceChain, pack: dict = SEVERITY_PACK):
+    def __init__(
+        self,
+        store,
+        chain: EvidenceChain,
+        pack: dict = SEVERITY_PACK,
+        storm_pack: dict = STORM_PACK,
+    ):
         self.store = store
         self.chain = chain
         self.pack = pack
+        # Round 8: the storm pack whose stated overrides apply
+        # to incidents stamped storm. Nothing else about the
+        # service changes with the mode.
+        self.storm_pack = storm_pack
 
     def _topology_for(self, incident: Incident) -> TopologyView | None:
         payload = self.store.get_topology_payload(incident.topology_version)
@@ -240,13 +266,23 @@ class SeverityService:
         }
         alarms_by_id = {k: v for k, v in alarms_by_id.items() if v is not None}
         prior = self.current(incident_id)
+        pack = self.pack
+        storm: dict | None = None
+        if incident.operating_mode == "storm":
+            pack = storm_severity_pack(self.pack, self.storm_pack)
+            storm = {
+                "pack_version": incident.storm_pack_version,
+                "declaration_id": incident.storm_declaration_id,
+                "adjustments": severity_adjustments(self.storm_pack),
+            }
         candidate = compute_assessment(
             incident,
             alarms_by_id,
             self._topology_for(incident),
             as_of,
-            pack=self.pack,
+            pack=pack,
             supersedes=prior.assessment_id if prior else None,
+            storm=storm,
         )
         if prior is not None:
             # Identical recomputation against the same head: a

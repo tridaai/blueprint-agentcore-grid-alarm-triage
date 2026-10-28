@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from grid_triage.correlation import correlate
 from grid_triage.evidence import EvidenceChain
 from grid_triage.models import Alarm, Incident
+from grid_triage.storm import STORM_PACK
 from grid_triage.topology import TopologyView
 
 
@@ -44,9 +45,14 @@ def incident_id_for(anchor: Alarm) -> str:
 
 
 class CorrelationService:
-    def __init__(self, store, chain: EvidenceChain):
+    def __init__(self, store, chain: EvidenceChain, storm=None):
         self.store = store
         self.chain = chain
+        # Round 8: the storm state fold. When wired, anchors are
+        # stamped with the mode in force at their own time and
+        # storm incidents correlate under the storm pack's
+        # widened rules; without it every incident is normal.
+        self.storm = storm
 
     def correlate_new(self, topology: TopologyView) -> list[Incident]:
         """Correlate all currently uncorrelated alarms against the
@@ -56,7 +62,13 @@ class CorrelationService:
         pending = self.store.list_uncorrelated_alarms()
         if not pending:
             return []
-        result = correlate(pending, topology, incident_id_for=incident_id_for)
+        result = correlate(
+            pending,
+            topology,
+            incident_id_for=incident_id_for,
+            storm_lookup=self.storm.lookup if self.storm is not None else None,
+            storm_pack=STORM_PACK if self.storm is not None else None,
+        )
         by_id = {a.alarm_id: a for a in pending}
         created: list[Incident] = []
         for incident in result.incidents:

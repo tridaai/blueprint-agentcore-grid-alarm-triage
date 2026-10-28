@@ -127,7 +127,13 @@ class RestorationService:
         cause=None,
         etr=None,
         pack: dict = RESTORATION_PACK,
+        storm=None,
     ):
+        # Round 8: the storm state fold, when wired. Incidents
+        # this service brings into being — split parts and
+        # post-close fresh incidents — are stamped with the mode
+        # in force at the act that creates them.
+        self.storm = storm
         self.store = store
         self.chain = chain
         self.closure = closure
@@ -715,6 +721,15 @@ class RestorationService:
 
         restored_id = f"{incident_id}-RESTORED"
         continuing_id = f"{incident_id}-CONT"
+        # Round 8: both parts are stamped with the mode in force
+        # at the split act — a part divided out under storm mode
+        # carries the storm on its face, exactly like an incident
+        # correlated under it.
+        stamp = (
+            self.storm.stamp_for(incident.feeder_id, split_at)
+            if self.storm is not None
+            else {}
+        )
         for new_id, alarms in (
             (restored_id, restored_alarms),
             (continuing_id, continuing_alarms),
@@ -729,6 +744,7 @@ class RestorationService:
                     correlation_pack_version=incident.correlation_pack_version,
                     anchor_alarm_id=anchor.alarm_id,
                     created_at=split_at,
+                    **stamp,
                 )
             )
             rules = {m.alarm_id: m.rule_id for m, _ in members}
@@ -816,6 +832,14 @@ class RestorationService:
                 substation = (
                     view.substation_of_feeder(alarm.feeder_id) or substation
                 )
+            # Round 8: the fresh incident arises from this alarm,
+            # so it is stamped with the mode in force at the
+            # alarm's own time, like any correlated incident.
+            stamp = (
+                self.storm.stamp_for(alarm.feeder_id, alarm.raised_at)
+                if self.storm is not None
+                else {}
+            )
             self.store.add_incident(
                 Incident(
                     incident_id=fresh_id,
@@ -827,6 +851,7 @@ class RestorationService:
                     ),
                     anchor_alarm_id=alarm.alarm_id,
                     created_at=alarm.raised_at,
+                    **stamp,
                 )
             )
             self.store.add_membership(

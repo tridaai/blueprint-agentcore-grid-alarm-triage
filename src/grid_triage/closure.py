@@ -134,6 +134,11 @@ class ClosureService:
             "closure_id": closure.closure_id,
             "estimate_id": None,
             "cause_class": cause_class,
+            # Round 8: the incident's operating mode, copied from
+            # its stamp — the accuracy ledger's storm/normal
+            # separation reads this field, never an inference.
+            "operating_mode": incident.operating_mode,
+            "storm_declaration_id": incident.storm_declaration_id,
             "status": "no_computed_estimate",
             "estimated_duration_minutes": None,
             "actual_duration_minutes": actual,
@@ -173,21 +178,29 @@ class ClosureService:
         """Running ETR error statistics per cause class, computed
         from the stored outcomes. Only ``compared`` outcomes carry
         error figures; unestimated closures are counted separately
-        so the ledger shows its own blind spots."""
+        so the ledger shows its own blind spots.
+
+        Round 8 adds ``by_operating_mode``: the same statistics
+        computed separately for normal and storm outcomes, from
+        the mode recorded on each outcome. Storm performance is
+        never blended into the normal figures — a reader who
+        wants the storm record reads the storm row, and the
+        rows' compared counts sum to the overall count exactly,
+        so the separation itself is checkable."""
         compared: dict[str, list[EtrOutcome]] = {}
         unestimated = 0
-        for outcome in self.store.list_etr_outcomes():
+        outcomes = self.store.list_etr_outcomes()
+        for outcome in outcomes:
             if outcome.status == "compared":
                 compared.setdefault(outcome.cause_class, []).append(outcome)
             else:
                 unestimated += 1
 
-        def row(cause_class: str, outcomes: list[EtrOutcome]) -> dict:
-            signed = [o.signed_error_minutes for o in outcomes]
-            absolute = [o.absolute_error_minutes for o in outcomes]
+        def stats(compared_outcomes: list[EtrOutcome]) -> dict:
+            signed = [o.signed_error_minutes for o in compared_outcomes]
+            absolute = [o.absolute_error_minutes for o in compared_outcomes]
             return {
-                "cause_class": cause_class,
-                "compared_count": len(outcomes),
+                "compared_count": len(compared_outcomes),
                 "mean_signed_error_minutes": (
                     round(sum(signed) / len(signed), 3) if signed else None
                 ),
@@ -197,10 +210,28 @@ class ClosureService:
                 "max_absolute_error_minutes": max(absolute) if absolute else None,
             }
 
+        def row(cause_class: str, outcomes_: list[EtrOutcome]) -> dict:
+            return {"cause_class": cause_class, **stats(outcomes_)}
+
         by_class = [row(cc, compared[cc]) for cc in sorted(compared)]
-        all_outcomes = [o for outcomes in compared.values() for o in outcomes]
+        all_outcomes = [o for outcomes_ in compared.values() for o in outcomes_]
+        by_mode = []
+        for mode in ("normal", "storm"):
+            mode_outcomes = [o for o in outcomes if o.operating_mode == mode]
+            mode_compared = [o for o in mode_outcomes if o.status == "compared"]
+            if not mode_outcomes:
+                continue
+            by_mode.append(
+                {
+                    "operating_mode": mode,
+                    **stats(mode_compared),
+                    "unestimated_closures": len(mode_outcomes)
+                    - len(mode_compared),
+                }
+            )
         return {
             "by_cause_class": by_class,
+            "by_operating_mode": by_mode,
             "overall": row("all", all_outcomes),
             "unestimated_closures": unestimated,
         }

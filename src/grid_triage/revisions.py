@@ -423,6 +423,7 @@ class RevisionService:
         etr: EtrService,
         topology: TopologyService,
         pack: dict = TOPOLOGY_PACK,
+        storm=None,
     ):
         self.store = store
         self.chain = chain
@@ -431,6 +432,12 @@ class RevisionService:
         self.etr = etr
         self.topology = topology
         self.pack = pack
+        # Round 8: the storm state fold, when wired. A revision
+        # is produced by the re-correlation act, so the revised
+        # incident is stamped with the mode in force at that act.
+        # Grouping itself still follows the correlation pack —
+        # the stamp labels the revision, it does not re-group it.
+        self.storm = storm
 
     # -- lineage ------------------------------------------------------
     def _lineage_ids(self, incident_id: str) -> set[str]:
@@ -592,6 +599,11 @@ class RevisionService:
             if a is not None
         }
 
+        stamp = (
+            self.storm.stamp_for(incident.feeder_id, recorrelated_at)
+            if self.storm is not None
+            else {}
+        )
         revised = Incident(
             incident_id=revised_id,
             feeder_id=incident.feeder_id,
@@ -601,6 +613,7 @@ class RevisionService:
             correlation_pack_version=group.correlation_pack_version,
             anchor_alarm_id=incident.anchor_alarm_id,
             created_at=recorrelated_at,
+            **stamp,
         )
         self.store.add_incident(revised)
         from grid_triage.models import IncidentMembership

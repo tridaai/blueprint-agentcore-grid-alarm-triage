@@ -287,3 +287,262 @@ def _burst_alarm(alarm_id: str, device: str, kind: str, at: datetime) -> Alarm:
         raised_at=at,
         message=f"{kind} reported by {device}",
     )
+
+
+# -- correlation, severity and ETR under the declared state --------------
+
+BURST_T0 = datetime(2026, 10, 16, 2, 0, tzinfo=timezone.utc)
+
+
+def _burst() -> list[Alarm]:
+    """A storm burst on Feeder 7, built so the pack's deltas are
+    what decide its shape: the 02:12 sag reaches the incident
+    only through the widened storm window, and the meter ping
+    joins only because the storm pack names it joinable."""
+    return [
+        _burst_alarm("ALM-STM-001", "BRK-070", "breaker_trip", BURST_T0),
+        _burst_alarm(
+            "ALM-STM-002", "BRK-070", "relay_protection",
+            BURST_T0 + timedelta(seconds=20),
+        ),
+        _burst_alarm(
+            "ALM-STM-003", "REC-071", "recloser_lockout",
+            BURST_T0 + timedelta(seconds=40),
+        ),
+        _burst_alarm(
+            "ALM-STM-004", "SEN-0722", "meter_ping_failure",
+            BURST_T0 + timedelta(minutes=5),
+        ),
+        _burst_alarm(
+            "ALM-STM-005", "SEC-072", "voltage_sag",
+            BURST_T0 + timedelta(minutes=12),
+        ),
+        _burst_alarm(
+            "ALM-STM-006", "SEC-073", "phase_loss",
+            BURST_T0 + timedelta(minutes=20),
+        ),
+    ]
+
+
+def _correlate_burst(services, declare: bool):
+    declaration = _declare(services) if declare else None
+    services.intake.ingest(_burst())
+    created = services.correlator.correlate_new(services.topology)
+    assert len(created) == 1
+    return declaration, created[0]
+
+
+def test_storm_correlation_widens_the_window_and_stamps_the_incident(services):
+    declaration, incident = _correlate_burst(services, declare=True)
+    members = {
+        m.alarm_id for m in services.store.list_memberships(incident.incident_id)
+    }
+    assert members == {a.alarm_id for a in _burst()}
+    assert incident.operating_mode == "storm"
+    assert incident.storm_declaration_id == declaration.declaration_id
+    assert incident.storm_pack_version == STORM_PACK["version"]
+    # The stored row carries the stamp, not just the return value.
+    stored = services.store.get_incident(incident.incident_id)
+    assert stored.operating_mode == "storm"
+    assert stored.storm_declaration_id == declaration.declaration_id
+
+
+def test_the_same_burst_groups_narrowly_without_a_declaration(services):
+    _, incident = _correlate_burst(services, declare=False)
+    members = {
+        m.alarm_id for m in services.store.list_memberships(incident.incident_id)
+    }
+    # Only the three protection alarms group: the sag is outside
+    # the normal window, the ping is an excluded kind, and the
+    # phase loss has no anchor in window. All stay visible.
+    assert members == {"ALM-STM-001", "ALM-STM-002", "ALM-STM-003"}
+    assert incident.operating_mode == "normal"
+    assert incident.storm_declaration_id is None
+    uncorrelated = {
+        a.alarm_id for a in services.store.list_uncorrelated_alarms()
+    }
+    assert {"ALM-STM-004", "ALM-STM-005", "ALM-STM-006"} <= uncorrelated
+
+
+def test_an_incident_raised_before_the_declaration_is_not_stamped(services):
+    # The burst predates the declaration: correlation runs after
+    # the act is recorded, but the stamp is judged at the
+    # anchor's own time — the mode the incident arose under.
+    services.intake.ingest(_burst())
+    _declare(services, declared_at=BURST_T0 + timedelta(hours=1))
+    created = services.correlator.correlate_new(services.topology)
+    assert len(created) == 1
+    assert created[0].operating_mode == "normal"
+    members = {
+        m.alarm_id for m in services.store.list_memberships(created[0].incident_id)
+    }
+    assert members == {"ALM-STM-001", "ALM-STM-002", "ALM-STM-003"}
+
+
+def test_storm_severity_applies_the_packs_stated_values(services):
+    from grid_triage.severity import compute_assessment
+
+    _, incident = _correlate_burst(services, declare=True)
+    as_of = BURST_T0 + timedelta(minutes=90)
+    assessment = services.severity.assess(incident.incident_id, as_of)
+    # Hand-computed under the storm pack: customers 1440 -> 50
+    # (capped), hospital 30, duration 90 min -> 90//60 = 1,
+    # breadth 6 alarms -> 6//5 = 1. Score 82, SEV-1.
+    assert assessment.inputs["points"] == {
+        "customers": 50,
+        "critical_loads": 30,
+        "duration": 1,
+        "breadth": 1,
+    }
+    assert assessment.score == 82
+    assert assessment.band == "SEV-1"
+    assert assessment.inputs["operating_mode"] == "storm"
+    assert assessment.inputs["storm_declaration_id"] == incident.storm_declaration_id
+    assert assessment.inputs["storm_adjustments"] == {
+        key: {"normal": pair["normal"], "storm": pair["storm"]}
+        for key, pair in STORM_PACK["severity"].items()
+    }
+    # The same incident under the unadjusted pack computes
+    # differently in exactly the two named terms — nothing else
+    # moved.
+    alarms_by_id = {
+        m.alarm_id: services.store.get_alarm(m.alarm_id)
+        for m in services.store.list_memberships(incident.incident_id)
+    }
+    normal = compute_assessment(
+        incident, alarms_by_id, services.topology, as_of
+    )
+    assert normal.inputs["points"]["duration"] == 3  # 90//30, cap 10
+    assert normal.inputs["points"]["breadth"] == 0  # 6//10, cap 5
+    assert normal.score == 83
+    assert normal.inputs["operating_mode"] == "normal"
+
+
+def test_storm_etr_carries_the_stated_adjustment_as_its_own_line(services):
+    _, incident = _correlate_burst(services, declare=True)
+    estimate = services.etr.estimate(incident.incident_id, BURST_T0 + timedelta(minutes=30))
+    assert estimate.status == "computed"
+    assert estimate.operating_mode == "storm"
+    assert estimate.storm_declaration_id == incident.storm_declaration_id
+    assert estimate.storm_pack_version == STORM_PACK["version"]
+    components = {c["name"]: c["minutes"] for c in estimate.components}
+    # vegetation_contact | feeder_breaker = 150 in the rate pack;
+    # the storm factor 6/5 makes 180, and the 30 added minutes
+    # are their own line.
+    assert components["base_repair"] == 150
+    assert components["storm_conditions"] == 30
+    assert estimate.total_minutes == (
+        components["crew_wait"]
+        + components["travel_access"]
+        + components["base_repair"]
+        + components["storm_conditions"]
+    )
+    storm_line = next(
+        c for c in estimate.components if c["name"] == "storm_conditions"
+    )
+    assert storm_line["detail"]["storm_base_repair_minutes"] == 180
+    assert storm_line["detail"]["factor"] == {"numerator": 6, "denominator": 5}
+
+
+def test_normal_etr_has_no_storm_line(services):
+    _, incident = _correlate_burst(services, declare=False)
+    estimate = services.etr.estimate(incident.incident_id, BURST_T0 + timedelta(minutes=30))
+    assert estimate.operating_mode == "normal"
+    assert estimate.storm_declaration_id is None
+    names = [c["name"] for c in estimate.components]
+    assert "storm_conditions" not in names
+
+
+def test_outcomes_record_the_mode_and_the_ledger_keeps_modes_separate(services):
+    declaration, storm_incident = _correlate_burst(services, declare=True)
+    # A normal incident alongside: a lone Feeder 3 trip, outside
+    # the declared scope.
+    services.intake.ingest(
+        [
+            Alarm(
+                alarm_id="ALM-STM-LONE", stream_id="STREAM-SCADA-NORTH",
+                device_id="BRK-030", feeder_id="FDR-03", kind="breaker_trip",
+                severity="critical", raised_at=BURST_T0 + timedelta(hours=3),
+                message="Feeder 3 breaker tripped on protection",
+            )
+        ]
+    )
+    created = services.correlator.correlate_new(services.topology)
+    assert len(created) == 1
+    normal_incident = created[0]
+    assert normal_incident.operating_mode == "normal"
+
+    estimate = services.etr.estimate(
+        storm_incident.incident_id, BURST_T0 + timedelta(minutes=30)
+    )
+    assert estimate.status == "computed"
+    _, storm_outcome, _ = services.closure.close_incident(
+        storm_incident.incident_id,
+        "op.dana",
+        "operator",
+        BURST_T0 + timedelta(minutes=400),
+        "Storm damage on Feeder 7 cleared and the feeder restored.",
+        recorded_at=BURST_T0 + timedelta(minutes=401),
+    )
+    assert storm_outcome.status == "compared"
+    assert storm_outcome.operating_mode == "storm"
+    assert storm_outcome.storm_declaration_id == declaration.declaration_id
+
+    _, normal_outcome, _ = services.closure.close_incident(
+        normal_incident.incident_id,
+        "op.dana",
+        "operator",
+        BURST_T0 + timedelta(hours=3, minutes=30),
+        "Feeder 3 restored after inspection.",
+        recorded_at=BURST_T0 + timedelta(hours=3, minutes=31),
+    )
+    assert normal_outcome.status == "no_computed_estimate"
+    assert normal_outcome.operating_mode == "normal"
+    assert normal_outcome.storm_declaration_id is None
+
+    ledger = services.closure.accuracy_ledger()
+    by_mode = {row["operating_mode"]: row for row in ledger["by_operating_mode"]}
+    assert by_mode["storm"]["compared_count"] == 1
+    assert by_mode["storm"]["unestimated_closures"] == 0
+    assert (
+        by_mode["storm"]["mean_signed_error_minutes"]
+        == storm_outcome.signed_error_minutes
+    )
+    assert by_mode["normal"]["compared_count"] == 0
+    assert by_mode["normal"]["unestimated_closures"] == 1
+    # The separation is checkable: the mode rows' counts sum to
+    # the overall figures exactly.
+    assert (
+        sum(r["compared_count"] for r in ledger["by_operating_mode"])
+        == ledger["overall"]["compared_count"]
+    )
+    assert (
+        sum(r["unestimated_closures"] for r in ledger["by_operating_mode"])
+        == ledger["unestimated_closures"]
+    )
+
+
+def test_stand_down_does_not_relabel_what_the_window_stamped(services):
+    declaration, incident = _correlate_burst(services, declare=True)
+    services.storm.stand_down(
+        declaration.declaration_id,
+        "op.dana",
+        "operator",
+        "Cell has passed",
+        BURST_T0 + timedelta(hours=10),
+    )
+    stored = services.store.get_incident(incident.incident_id)
+    assert stored.operating_mode == "storm"
+    assert stored.storm_declaration_id == declaration.declaration_id
+    # New alarms after the stand-down correlate in normal mode.
+    services.intake.ingest(
+        [
+            _burst_alarm(
+                "ALM-STM-007", "BRK-070", "breaker_trip",
+                BURST_T0 + timedelta(hours=12),
+            )
+        ]
+    )
+    created = services.correlator.correlate_new(services.topology)
+    assert len(created) == 1
+    assert created[0].operating_mode == "normal"
