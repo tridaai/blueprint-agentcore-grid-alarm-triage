@@ -1,4 +1,4 @@
-"""Eval gate — Rounds 1–5 (grid alarm triage agent).
+"""Eval gate — Rounds 1–6 (grid alarm triage agent).
 
 Runs the planted streams through the real service graph on a
 throwaway SQLite store and grades the R1–R5 guarantees. Every
@@ -118,6 +118,30 @@ counter is zero-tolerance unless marked otherwise:
                                  marked draft, and no route, action
                                  or function in the package offers
                                  to send one
+  pinned_topology_update_errors  a field update carrying an alarm
+                                 from SEN-0723 (a device that exists
+                                 only in topology v2) against a
+                                 v1-pinned incident must record
+                                 unresolvable_under_pinned_topology,
+                                 and the alarm must not join
+  v1_incident_mutation_errors    declaring v2 must leave every
+                                 v1 incident artefact byte-identical
+  closed_recorrelation_accepted  re-correlating the closed flood
+                                 or lone incidents must be refused
+                                 naming the closure — accepted
+                                 attempts count
+  revision_diff_errors           the next-day incident's
+                                 re-correlation diff must be exact:
+                                 the two split-section alarms
+                                 removed, the SEN-0723 update alarm
+                                 added, devices matching, severity
+                                 SEV-1 84 -> SEV-2 64 with the
+                                 customer input named as moved
+  lone_v2_severity_errors        the lone trip recomputed purely
+                                 under v2 at +15min must be SEV-2
+                                 with score 58 — the annex hospital
+                                 load's +30 critical points on the
+                                 hand-computed v1 figure of 28
 
 Run: uv run python evals/run_evals.py  (exit 0 = GATE: PASS)
 """
@@ -168,6 +192,7 @@ from grid_triage.store import MemoryImmutableError  # noqa: E402
 from grid_triage.tools import TOOL_REGISTRY  # noqa: E402
 from grid_triage.topology import TopologyView  # noqa: E402
 from grid_triage.wiring import Services  # noqa: E402
+from grid_triage.revisions import RevisionRefusal  # noqa: E402
 from grid_triage.work_orders import WORK_PACK, WorkOrderRefusal  # noqa: E402
 
 CONTROL_MARKERS = (
@@ -887,7 +912,148 @@ def main() -> int:
                 send_surfaces += 1
     counters["notification_send_surfaces"] = send_surfaces
 
-    print("Evals — grid alarm triage agent (Rounds 1-5)")
+    # ---- Round 6: field updates, v2 declaration, re-correlation ----
+    # A fresh Feeder 7 incident the next day, with two alarms on
+    # the section v2 splits away and one update alarm from the
+    # sensor only v2 knows.
+    r6_base = datetime(2026, 10, 15, 1, 0, tzinfo=timezone.utc)
+    svc.intake.ingest(
+        [
+            Alarm(alarm_id="ALM-R6-001", stream_id="STREAM-SCADA-NORTH",
+                  device_id="BRK-070", feeder_id="FDR-07", kind="breaker_trip",
+                  severity="critical", raised_at=r6_base,
+                  message="Feeder 7 breaker tripped on protection"),
+            Alarm(alarm_id="ALM-R6-002", stream_id="STREAM-SCADA-NORTH",
+                  device_id="BRK-070", feeder_id="FDR-07",
+                  kind="relay_protection", severity="critical",
+                  raised_at=r6_base + timedelta(seconds=30),
+                  message="Distance relay operated, zone 1"),
+            Alarm(alarm_id="ALM-R6-003", stream_id="STREAM-SCADA-NORTH",
+                  device_id="SEC-072", feeder_id="FDR-07", kind="phase_loss",
+                  severity="major", raised_at=r6_base + timedelta(seconds=60),
+                  message="Phase loss reported by SEC-072"),
+            Alarm(alarm_id="ALM-R6-004", stream_id="STREAM-SCADA-NORTH",
+                  device_id="SEC-073", feeder_id="FDR-07", kind="voltage_sag",
+                  severity="major", raised_at=r6_base + timedelta(seconds=90),
+                  message="Voltage sag reported by SEC-073"),
+            Alarm(alarm_id="ALM-R6-005", stream_id="STREAM-SCADA-NORTH",
+                  device_id="XF-0731", feeder_id="FDR-07",
+                  kind="transformer_temp_high", severity="major",
+                  raised_at=r6_base + timedelta(seconds=120),
+                  message="Transformer T31 temperature high"),
+        ]
+    )
+    r6_created = svc.correlator.correlate_new(svc.topology)
+    r6_errors = 0
+    if len(r6_created) != 1 or r6_created[0].incident_id != "INC-ALM-R6-001":
+        r6_errors += 1
+    r6_incident = r6_created[0]
+    r6_snapshot = r6_incident.model_dump(mode="json")
+    r6_members_before = {
+        m.alarm_id for m in svc.store.list_memberships(r6_incident.incident_id)
+    }
+    if r6_members_before != {
+        "ALM-R6-001", "ALM-R6-002", "ALM-R6-003", "ALM-R6-004", "ALM-R6-005",
+    }:
+        r6_errors += 1
+
+    sensor_update = svc.updates.post_update(
+        r6_incident.incident_id, "alarm_observation", "crew.lee",
+        "field_crew", r6_base + timedelta(minutes=20),
+        alarm=Alarm(
+            alarm_id="ALM-R6-101", stream_id="STREAM-SCADA-NORTH",
+            device_id="SEN-0723", feeder_id="FDR-07",
+            kind="line_sensor_fault", severity="minor",
+            raised_at=r6_base + timedelta(minutes=2),
+            message="New sensor LS23 reports a fault indication",
+        ),
+    )
+    counters["pinned_topology_update_errors"] = (
+        0
+        if (
+            sensor_update.correlation["status"]
+            == "unresolvable_under_pinned_topology"
+            and "SEN-0723" in sensor_update.correlation["reason"]
+            and svc.store.membership_for_alarm("ALM-R6-101") is None
+        )
+        else 1
+    )
+
+    svc.topology_acts.declare(
+        "v2", "op.dana", "operator",
+        datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc),
+        datetime(2026, 10, 15, 0, 0, tzinfo=timezone.utc),
+    )
+    counters["v1_incident_mutation_errors"] = (
+        0
+        if (
+            svc.store.get_incident(r6_incident.incident_id).model_dump(mode="json")
+            == r6_snapshot
+            and {
+                m.alarm_id
+                for m in svc.store.list_memberships(r6_incident.incident_id)
+            }
+            == r6_members_before
+            and svc.store.get_incident(flood_incident.incident_id)
+            .model_dump(mode="json")
+            == flood_incident.model_dump(mode="json")
+        )
+        else 1
+    )
+
+    closed_accepted = 0
+    for closed_id in (flood_incident.incident_id, lone_incident.incident_id):
+        try:
+            svc.revisions.recorrelate(
+                closed_id, "op.dana", "operator",
+                datetime(2026, 10, 15, 3, 0, tzinfo=timezone.utc),
+            )
+            closed_accepted += 1  # a closed incident was re-correlated
+        except RevisionRefusal as exc:
+            if not any("closed" in p for p in exc.problems):
+                closed_accepted += 1
+    counters["closed_recorrelation_accepted"] = closed_accepted
+
+    revision = svc.revisions.recorrelate(
+        r6_incident.incident_id, "op.dana", "operator",
+        datetime(2026, 10, 15, 3, 0, tzinfo=timezone.utc),
+    )
+    if revision.diff["alarms_added"] != ["ALM-R6-101"]:
+        r6_errors += 1
+    if revision.diff["alarms_removed"] != ["ALM-R6-004", "ALM-R6-005"]:
+        r6_errors += 1
+    if revision.diff["devices_removed"] != ["SEC-073", "XF-0731"]:
+        r6_errors += 1
+    if revision.diff["devices_added"] != ["SEN-0723"]:
+        r6_errors += 1
+    change = revision.severity_change
+    if not (
+        change["changed"]
+        and (change["prior_band"], change["prior_score"]) == ("SEV-1", 84)
+        and (change["revised_band"], change["revised_score"]) == ("SEV-2", 64)
+        and change["moved_inputs"].get("customers_affected")
+        == {"prior": 1440, "revised": 760}
+    ):
+        r6_errors += 1
+    if len(svc.store.list_memberships(revision.revised_incident_id)) != 4:
+        r6_errors += 1
+    counters["revision_diff_errors"] = r6_errors
+
+    lone_members = {
+        m.alarm_id: svc.store.get_alarm(m.alarm_id)
+        for m in svc.store.list_memberships(lone_incident.incident_id)
+    }
+    lone_v2 = compute_assessment(
+        lone_incident,
+        lone_members,
+        TopologyView(svc.store.get_topology_payload("v2")),
+        lone_alarms()[0].raised_at + timedelta(minutes=15),
+    )
+    counters["lone_v2_severity_errors"] = (
+        0 if (lone_v2.band == "SEV-2" and lone_v2.score == 58) else 1
+    )
+
+    print("Evals — grid alarm triage agent (Rounds 1-6)")
     for name, value in counters.items():
         print(f"  {name}: {value} (required 0)")
     failed = [n for n, v in counters.items() if v != 0]
