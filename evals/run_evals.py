@@ -1,7 +1,7 @@
-"""Eval gate — Rounds 1–4 (grid alarm triage agent).
+"""Eval gate — Rounds 1–5 (grid alarm triage agent).
 
 Runs the planted streams through the real service graph on a
-throwaway SQLite store and grades the R1–R4 guarantees. Every
+throwaway SQLite store and grades the R1–R5 guarantees. Every
 counter is zero-tolerance unless marked otherwise:
 
   flood_incident_count_error     the 40-alarm flood must produce
@@ -86,6 +86,38 @@ counter is zero-tolerance unless marked otherwise:
   etr_accuracy_errors            the ledger after both closures
                                  must read exactly: vegetation x1,
                                  mean signed +20, unestimated 1
+  work_order_fixture_errors      the flood draft must carry every
+                                 pack-derived section exactly: 8
+                                 devices in order, 5 safety kinds,
+                                 vegetation_clearing, the pack
+                                 materials, the T+30 ETR pinned,
+                                 no gaps; the lone draft must name
+                                 its required_qualification gap
+  work_order_assignment_errors   the roster-committed window is
+                                 refused naming INC-EXT-2201; an
+                                 unqualified crew is refused; a
+                                 cross-order overlap is refused
+                                 naming the live assignment; the
+                                 unclassified draft cannot be
+                                 assigned at all
+  work_order_approval_errors     approval without assignment,
+                                 self-approval of a human revision,
+                                 and a wrong-role approval are all
+                                 refused; a clean approval pins the
+                                 exact version, drafts exactly 2
+                                 notifications, and a second
+                                 decision on the version is refused
+  work_order_rejection_errors    rejection without a reason is
+                                 refused; a rejected version cannot
+                                 be approved; approving a
+                                 superseded version is refused; a
+                                 post-approval revision stands in
+                                 draft while the approval stays
+                                 pinned to the old version
+  notification_send_surfaces     every notification body is a
+                                 marked draft, and no route, action
+                                 or function in the package offers
+                                 to send one
 
 Run: uv run python evals/run_evals.py  (exit 0 = GATE: PASS)
 """
@@ -136,6 +168,7 @@ from grid_triage.store import MemoryImmutableError  # noqa: E402
 from grid_triage.tools import TOOL_REGISTRY  # noqa: E402
 from grid_triage.topology import TopologyView  # noqa: E402
 from grid_triage.wiring import Services  # noqa: E402
+from grid_triage.work_orders import WORK_PACK, WorkOrderRefusal  # noqa: E402
 
 CONTROL_MARKERS = (
     "switch", "reclose", "shed", "energize", "setpoint",
@@ -614,7 +647,247 @@ def main() -> int:
         else 1
     )
 
-    print("Evals — grid alarm triage agent (Rounds 1-4)")
+    # ---- Round 5: work orders, graded against the planted fixtures ----
+    # The flood was closed above with its T+30 ETR of record; the
+    # draft drawn at the same as-of pins exactly that estimate.
+    wo = svc.work_orders
+    wo_at = T0 + timedelta(minutes=30)
+    win_ok = (T0 + timedelta(minutes=90), T0 + timedelta(minutes=270))
+    flood_order = wo.draft(flood_incident.incident_id, wo_at)
+
+    fixture_errors = 0
+    if flood_order.drafted_by != "system" or flood_order.version != 1:
+        fixture_errors += 1
+    if flood_order.cause_class != "vegetation_contact":
+        fixture_errors += 1
+    if flood_order.estimate_id != flood_etr.estimate_id:
+        fixture_errors += 1
+    if [
+        (d["device_id"], d["kind"]) for d in flood_order.affected_devices
+    ] != [
+        ("BRK-070", "feeder_breaker"),
+        ("REC-071", "recloser"),
+        ("SEC-072", "sectionalizer"),
+        ("SEC-073", "sectionalizer"),
+        ("SEN-0722", "line_sensor"),
+        ("SEN-0732", "line_sensor"),
+        ("XF-0721", "transformer"),
+        ("XF-0731", "transformer"),
+    ]:
+        fixture_errors += 1
+    if [s["device_kind"] for s in flood_order.safety_notes] != [
+        "feeder_breaker",
+        "recloser",
+        "sectionalizer",
+        "line_sensor",
+        "transformer",
+    ]:
+        fixture_errors += 1
+    if flood_order.required_qualification != "vegetation_clearing":
+        fixture_errors += 1
+    if flood_order.materials != WORK_PACK["classes"]["vegetation_contact"][
+        "materials"
+    ]:
+        fixture_errors += 1
+    if flood_order.gaps != [] or wo.state_of(flood_order) != "draft":
+        fixture_errors += 1
+    lone_order = wo.draft(lone_incident.incident_id, T0 + timedelta(hours=8))
+    if not (
+        lone_order.cause_class == "unknown"
+        and lone_order.required_qualification is None
+        and lone_order.gaps == ["required_qualification"]
+    ):
+        fixture_errors += 1
+    counters["work_order_fixture_errors"] = fixture_errors
+
+    assign_errors = 0
+    try:
+        wo.assign(
+            flood_order.order_id, "CREW-NORTH-VEG", "op.dana",
+            T0 + timedelta(minutes=30), T0 + timedelta(minutes=250), wo_at,
+        )
+        assign_errors += 1  # the roster-committed window was accepted
+    except WorkOrderRefusal as exc:
+        if not any("INC-EXT-2201" in p for p in exc.problems):
+            assign_errors += 1
+    try:
+        wo.assign(
+            flood_order.order_id, "CREW-SOUTH-EQUIP", "op.dana",
+            win_ok[0], win_ok[1], wo_at,
+        )
+        assign_errors += 1  # an unqualified crew was accepted
+    except WorkOrderRefusal:
+        pass
+    try:
+        wo.assign(
+            lone_order.order_id, "CREW-ALDER-LINE", "op.dana",
+            T0 + timedelta(hours=9), T0 + timedelta(hours=11), wo_at,
+        )
+        assign_errors += 1  # the unclassified draft was assigned
+    except WorkOrderRefusal:
+        pass
+    flood_assignment = wo.assign(
+        flood_order.order_id, "CREW-NORTH-VEG", "op.dana",
+        win_ok[0], win_ok[1], wo_at,
+    )
+    # A second vegetation incident the same evening: the crew's
+    # flood window is a live double-booking constraint.
+    veg2_base = datetime(2026, 10, 14, 20, 0, tzinfo=timezone.utc)
+    svc.intake.ingest(
+        [
+            Alarm(
+                alarm_id="ALM-VEG2-001", stream_id="STREAM-SCADA-NORTH",
+                device_id="BRK-070", feeder_id="FDR-07", kind="breaker_trip",
+                severity="critical", raised_at=veg2_base,
+                message="Feeder 7 breaker tripped again",
+            ),
+            Alarm(
+                alarm_id="ALM-VEG2-002", stream_id="STREAM-SCADA-NORTH",
+                device_id="REC-071", feeder_id="FDR-07",
+                kind="recloser_lockout", severity="critical",
+                raised_at=veg2_base + timedelta(seconds=30),
+                message="Recloser R1 locked out",
+            ),
+            Alarm(
+                alarm_id="ALM-VEG2-003", stream_id="STREAM-SCADA-NORTH",
+                device_id="SEC-072", feeder_id="FDR-07", kind="phase_loss",
+                severity="major",
+                raised_at=veg2_base + timedelta(seconds=60),
+                message="Phase loss reported by SEC-072",
+            ),
+        ]
+    )
+    veg2 = svc.correlator.correlate_new(svc.topology)
+    if len(veg2) != 1:
+        assign_errors += 1
+    else:
+        veg2_order = wo.draft(veg2[0].incident_id, T0 + timedelta(hours=18))
+        try:
+            wo.assign(
+                veg2_order.order_id, "CREW-NORTH-VEG", "op.dana",
+                T0 + timedelta(minutes=240), T0 + timedelta(minutes=540),
+                wo_at,
+            )
+            assign_errors += 1  # a double-booking was accepted
+        except WorkOrderRefusal as exc:
+            if not any(
+                flood_assignment.assignment_id in p for p in exc.problems
+            ):
+                assign_errors += 1
+    counters["work_order_assignment_errors"] = assign_errors
+
+    approval_errors = 0
+    lone_v2 = wo.revise(
+        lone_order.order_id, "op.rivera", wo_at, operator_note="For review."
+    )
+    try:
+        wo.decide(lone_v2.order_id, "approved", "op.dana", "operator", wo_at)
+        approval_errors += 1  # approval with no crew assignment landed
+    except WorkOrderRefusal:
+        pass
+    revised = wo.revise(
+        flood_order.order_id, "op.rivera", wo_at,
+        operator_note="Chipper to be collected from the Alder depot gate.",
+    )
+    wo.assign(
+        revised.order_id, "CREW-NORTH-VEG", "op.dana",
+        win_ok[0], win_ok[1], wo_at,
+    )
+    try:
+        wo.decide(revised.order_id, "approved", "op.rivera", "operator", wo_at)
+        approval_errors += 1  # self-approval of a human revision landed
+    except WorkOrderRefusal:
+        pass
+    try:
+        wo.decide(revised.order_id, "approved", "op.dana", "field_crew", wo_at)
+        approval_errors += 1  # a wrong-role approval landed
+    except WorkOrderRefusal:
+        pass
+    act, notifications = wo.decide(
+        revised.order_id, "approved", "op.dana", "operator", wo_at
+    )
+    if act.order_id != revised.order_id:
+        approval_errors += 1
+    if wo.state_of(revised) != "approved":
+        approval_errors += 1
+    if len(notifications) != 2 or act.notification_ids != [
+        n.notification_id for n in notifications
+    ]:
+        approval_errors += 1
+    try:
+        wo.decide(
+            revised.order_id, "rejected", "op.dana", "operator", wo_at,
+            reason="too late",
+        )
+        approval_errors += 1  # a decided version was decided again
+    except WorkOrderRefusal:
+        pass
+    counters["work_order_approval_errors"] = approval_errors
+
+    rejection_errors = 0
+    try:
+        wo.decide(lone_v2.order_id, "rejected", "op.dana", "operator", wo_at)
+        rejection_errors += 1  # a reasonless rejection landed
+    except WorkOrderRefusal:
+        pass
+    wo.decide(
+        lone_v2.order_id, "rejected", "op.dana", "operator", wo_at,
+        reason="Cause unclassified — classify before drafting field work.",
+    )
+    if wo.state_of(lone_v2) != "rejected":
+        rejection_errors += 1
+    try:
+        wo.decide(lone_v2.order_id, "approved", "op.dana", "operator", wo_at)
+        rejection_errors += 1  # a rejected version was approved
+    except WorkOrderRefusal:
+        pass
+    try:
+        wo.decide(flood_order.order_id, "approved", "op.dana", "operator", wo_at)
+        rejection_errors += 1  # a superseded version was approved
+    except WorkOrderRefusal:
+        pass
+    post = wo.revise(
+        revised.order_id, "op.dana", wo_at,
+        operator_note="Second tree found on the section.",
+    )
+    if not (
+        post.version == 3
+        and post.supersedes == revised.order_id
+        and wo.state_of(post) == "draft"
+        and wo.state_of(revised) == "approved"
+    ):
+        rejection_errors += 1
+    counters["work_order_rejection_errors"] = rejection_errors
+
+    # Notifications are drafts, and nothing in the package can
+    # send one: scan the registry, the routes, the Runtime actions
+    # and every function name for a send-shaped surface.
+    import re as _re
+    from pathlib import Path as _Path
+
+    send_surfaces = 0
+    for incident in incidents:
+        for note in svc.store.list_notifications(incident.incident_id):
+            if not note.body.startswith("DRAFT notification — not sent"):
+                send_surfaces += 1
+    src_root = _Path(__file__).resolve().parents[1] / "src" / "grid_triage"
+    for route in _re.findall(
+        r'@app\.(?:get|post)\("([^"]+)"', (src_root / "api.py").read_text()
+    ):
+        if any(v in route for v in ("send", "deliver", "transmit", "dispatch")):
+            send_surfaces += 1
+    for action in _re.findall(
+        r'action == "([^"]+)"', (src_root / "runtime_app.py").read_text()
+    ):
+        if any(v in action for v in ("send", "deliver", "transmit")):
+            send_surfaces += 1
+    for path in src_root.glob("*.py"):
+        for name in _re.findall(r"def (\w+)", path.read_text()):
+            if name.startswith(("send_", "deliver_", "transmit_")):
+                send_surfaces += 1
+    counters["notification_send_surfaces"] = send_surfaces
+
+    print("Evals — grid alarm triage agent (Rounds 1-5)")
     for name, value in counters.items():
         print(f"  {name}: {value} (required 0)")
     failed = [n for n, v in counters.items() if v != 0]
