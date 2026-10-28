@@ -244,7 +244,7 @@ src/grid_triage/   models, topology, correlation, services (ingest),
 data/topology/     versioned territory data (v1.json)
 data/roster/       versioned crew roster artefact (v1.json)
 migrations/        numbered SQL migrations, sqlite + postgres trees
-tests/             pytest suite (101 tests through R4)
+tests/             pytest suite (102 tests through R4)
 evals/             the eval gate (run_evals.py)
 docs/              architecture.md — the honest AgentCore mapping
 ```
