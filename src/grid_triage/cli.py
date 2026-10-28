@@ -1,6 +1,7 @@
-"""Operator CLI: read-only views over the store, plus the Round 2
-acknowledgement act — a recorded human act, not an operation on
-the grid (Law 1 — the CLI has no verb that operates anything)."""
+"""Operator CLI: read-only views over the store, plus the recorded
+human acts — the Round 2 acknowledgement, the Round 3 pack seal.
+None of them is an operation on the grid (Law 1 — the CLI has no
+verb that operates anything)."""
 
 from __future__ import annotations
 
@@ -8,6 +9,7 @@ import argparse
 import json
 from datetime import datetime, timezone
 
+from grid_triage.packs import PackRefusal
 from grid_triage.severity import SeverityRefusal
 from grid_triage.wiring import build_services
 
@@ -29,6 +31,25 @@ def main(argv: list[str] | None = None) -> int:
     p_ack.add_argument("assessment_id")
     p_ack.add_argument("--by", required=True, help="the acknowledging operator's name")
     p_ack.add_argument("--role", required=True, help="the acknowledging operator's role")
+    p_classify = sub.add_parser("classify")
+    p_classify.add_argument("incident_id")
+    p_classification = sub.add_parser("classification")
+    p_classification.add_argument("incident_id")
+    p_priors = sub.add_parser("priors")
+    p_priors.add_argument("incident_id")
+    sub.add_parser("load-history")
+    sub.add_parser("memory")
+    p_record = sub.add_parser("memory-record")
+    p_record.add_argument("record_id")
+    p_seal = sub.add_parser("seal-pack")
+    p_seal.add_argument("incident_id")
+    p_seal.add_argument("--by", required=True, help="the operator sealing the pack")
+    p_pack = sub.add_parser("pack")
+    p_pack.add_argument("incident_id")
+    p_packs = sub.add_parser("packs")
+    p_packs.add_argument("incident_id")
+    p_verify = sub.add_parser("verify-pack")
+    p_verify.add_argument("pack_id")
     args = parser.parse_args(argv)
 
     svc = build_services()
@@ -86,6 +107,86 @@ def main(argv: list[str] | None = None) -> int:
             print("refused: " + "; ".join(exc.problems))
             return 1
         print(json.dumps(ack.model_dump(mode="json"), indent=2))
+    elif args.command == "classify":
+        try:
+            classification = svc.cause.classify(
+                args.incident_id, datetime.now(timezone.utc)
+            )
+        except KeyError:
+            print(f"no such incident: {args.incident_id}")
+            return 1
+        print(json.dumps(classification.model_dump(mode="json"), indent=2))
+    elif args.command == "classification":
+        if svc.store.get_incident(args.incident_id) is None:
+            print(f"no such incident: {args.incident_id}")
+            return 1
+        classification = svc.cause.current(args.incident_id)
+        print(json.dumps(
+            classification.model_dump(mode="json") if classification else None,
+            indent=2,
+        ))
+    elif args.command == "priors":
+        try:
+            hits = svc.memory.retrieve_for_incident(
+                args.incident_id, datetime.now(timezone.utc)
+            )
+        except KeyError:
+            print(f"no such incident: {args.incident_id}")
+            return 1
+        print(json.dumps([h.model_dump(mode="json") for h in hits], indent=2))
+    elif args.command == "load-history":
+        records = svc.memory.load_history()
+        print(json.dumps({"loaded": [r.record_id for r in records]}, indent=2))
+    elif args.command == "memory":
+        print(json.dumps(
+            [r.model_dump(mode="json") for r in svc.memory_port.list_records()],
+            indent=2,
+        ))
+    elif args.command == "memory-record":
+        record = svc.memory_port.get_record(args.record_id)
+        if record is None:
+            print(f"no such memory record: {args.record_id}")
+            return 1
+        print(json.dumps(record.model_dump(mode="json"), indent=2))
+    elif args.command == "seal-pack":
+        try:
+            pack = svc.packs.seal(
+                args.incident_id, args.by, datetime.now(timezone.utc)
+            )
+        except KeyError:
+            print(f"no such incident: {args.incident_id}")
+            return 1
+        except PackRefusal as exc:
+            print("refused: " + "; ".join(exc.problems))
+            return 1
+        print(json.dumps(pack.model_dump(mode="json"), indent=2))
+    elif args.command == "pack":
+        if svc.store.get_incident(args.incident_id) is None:
+            print(f"no such incident: {args.incident_id}")
+            return 1
+        pack = svc.packs.current(args.incident_id)
+        print(json.dumps(
+            pack.model_dump(mode="json") if pack else None, indent=2
+        ))
+    elif args.command == "packs":
+        if svc.store.get_incident(args.incident_id) is None:
+            print(f"no such incident: {args.incident_id}")
+            return 1
+        print(json.dumps(
+            [p.model_dump(mode="json") for p in svc.packs.history(args.incident_id)],
+            indent=2,
+        ))
+    elif args.command == "verify-pack":
+        try:
+            problems = svc.packs.verify_pack(args.pack_id)
+        except KeyError:
+            print(f"no such evidence pack: {args.pack_id}")
+            return 1
+        print(json.dumps(
+            {"pack_id": args.pack_id, "valid": not problems, "problems": problems},
+            indent=2,
+        ))
+        return 0 if not problems else 1
     return 0
 
 

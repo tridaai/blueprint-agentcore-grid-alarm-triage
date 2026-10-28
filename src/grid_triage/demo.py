@@ -2,7 +2,9 @@
 
 Flood in → one incident out. Nuisance stream → no incident, every
 alarm still visible. Lone trip → its own incident. Then the agent
-assembles the flood incident's brief, every statement cited.
+assembles the flood incident's brief, every statement cited —
+including the prior incidents retrieved from memory — and the
+evidence pack is sealed and verified.
 """
 
 from __future__ import annotations
@@ -60,14 +62,41 @@ def run_demo(settings: Settings | None = None) -> Services:
 
     from datetime import datetime, timezone
 
-    brief = svc.assembler.assemble(flood.incident_id, datetime.now(timezone.utc))
+    now = datetime.now(timezone.utc)
+    loaded = svc.memory.load_history()
+    print(
+        f"\nMemory: {len(loaded)} closed historical incidents loaded "
+        "into the memory port (local double)."
+    )
+    classification = svc.cause.classify(flood.incident_id, now)
+    print(
+        f"Root-cause classification: {classification.cause_class} "
+        f"(rule: {classification.rule_id}, pack {classification.pack_version})."
+    )
+    hits = svc.memory.retrieve_for_incident(flood.incident_id, now)
+    for hit in hits:
+        print(
+            f"  prior {hit.record.incident_id} "
+            f"({hit.record.cause_class}, closed "
+            f"{hit.record.closed_at.date()}): score {hit.score}"
+        )
+
+    brief = svc.assembler.assemble(flood.incident_id, now)
     print(f"\nBrief {brief.brief_id} (profile: {brief.model_profile}):")
     for statement in brief.statements:
         cites = ", ".join(
             f"{c.evidence_item_id}:{c.field}" for c in statement.citations
         )
         print(f"  - {statement.text}  [{cites}]")
-    print(f"\nEvidence chain valid: {svc.chain.verify_chain(flood.incident_id)}")
+
+    pack = svc.packs.seal(flood.incident_id, "op.dana", now)
+    problems = svc.packs.verify_pack(pack.pack_id)
+    print(
+        f"\nEvidence pack {pack.pack_id} sealed by op.dana: "
+        f"{len(pack.members)} members, manifest {pack.manifest_hash[:16]}…, "
+        f"verify problems: {problems}."
+    )
+    print(f"Evidence chain valid: {svc.chain.verify_chain(flood.incident_id)}")
     return svc
 
 

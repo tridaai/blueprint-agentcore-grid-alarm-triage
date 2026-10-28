@@ -17,6 +17,13 @@ payload names one piece of triage work:
 - ``{"action": "acknowledge_severity", ...}`` /
   ``{"action": "acknowledgement_queue"}`` — the escalation
   acknowledgement act and the pending queue.
+- ``{"action": "classify_cause" | "get_classification", ...}`` —
+  the Round 3 root-cause classification pack.
+- ``{"action": "seed_history" | "list_memory_records" |
+  "get_memory_record" | "get_priors", ...}`` — the Round 3 memory
+  port (local double) and prior retrieval.
+- ``{"action": "seal_pack" | "get_pack" | "list_packs" |
+  "verify_pack", ...}`` — the Round 3 evidence pack acts.
 
 The Runtime session id (``context.session_id``) maps to one
 triage session and is carried into the logs. All domain work
@@ -30,8 +37,14 @@ from datetime import datetime, timezone
 
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 
-from grid_triage.agent import BandMismatchRefusal, CitationRefusal, ModelNotConfigured
+from grid_triage.agent import (
+    BandMismatchRefusal,
+    CitationRefusal,
+    ModelNotConfigured,
+    PriorAttributionRefusal,
+)
 from grid_triage.models import Alarm
+from grid_triage.packs import PackRefusal
 from grid_triage.services import DuplicateAlarm
 from grid_triage.severity import SeverityRefusal
 from grid_triage.wiring import Services, build_services
@@ -61,7 +74,7 @@ def handle_invocation(payload: dict, session_id: str | None = None) -> dict:
         incident_id = payload["incident_id"]
         try:
             brief = svc.assembler.assemble(incident_id, now)
-        except (CitationRefusal, BandMismatchRefusal) as exc:
+        except (CitationRefusal, BandMismatchRefusal, PriorAttributionRefusal) as exc:
             log.warning("brief refused for %s: %s", incident_id, exc, extra=extra)
             return {"status": "refused", "incident_id": incident_id, "problems": exc.problems}
         except ModelNotConfigured as exc:
@@ -124,6 +137,104 @@ def handle_invocation(payload: dict, session_id: str | None = None) -> dict:
             "pending": [
                 a.model_dump(mode="json") for a in svc.severity.pending_acknowledgements()
             ],
+        }
+    if action == "classify_cause":
+        incident_id = payload["incident_id"]
+        try:
+            classification = svc.cause.classify(incident_id, now)
+        except KeyError:
+            return {"status": "no_such_incident", "incident_id": incident_id}
+        return {
+            "status": "classified",
+            "incident_id": incident_id,
+            "classification": classification.model_dump(mode="json"),
+        }
+    if action == "get_classification":
+        incident_id = payload["incident_id"]
+        if svc.store.get_incident(incident_id) is None:
+            return {"status": "no_such_incident", "incident_id": incident_id}
+        classification = svc.cause.current(incident_id)
+        return {
+            "status": "ok",
+            "incident_id": incident_id,
+            "classification": (
+                classification.model_dump(mode="json") if classification else None
+            ),
+        }
+    if action == "seed_history":
+        records = svc.memory.load_history()
+        return {
+            "status": "ok",
+            "loaded": [r.record_id for r in records],
+            "count": len(records),
+        }
+    if action == "list_memory_records":
+        return {
+            "status": "ok",
+            "records": [
+                r.model_dump(mode="json") for r in svc.memory_port.list_records()
+            ],
+        }
+    if action == "get_memory_record":
+        record = svc.memory_port.get_record(payload["record_id"])
+        if record is None:
+            return {"status": "no_such_record", "record_id": payload["record_id"]}
+        return {"status": "ok", "record": record.model_dump(mode="json")}
+    if action == "get_priors":
+        incident_id = payload["incident_id"]
+        try:
+            hits = svc.memory.retrieve_for_incident(incident_id, now)
+        except KeyError:
+            return {"status": "no_such_incident", "incident_id": incident_id}
+        return {
+            "status": "ok",
+            "incident_id": incident_id,
+            "priors": [h.model_dump(mode="json") for h in hits],
+        }
+    if action == "seal_pack":
+        incident_id = payload["incident_id"]
+        sealed_at = now
+        if payload.get("sealed_at"):
+            sealed_at = datetime.fromisoformat(payload["sealed_at"])
+        try:
+            pack = svc.packs.seal(
+                incident_id, payload.get("sealed_by", ""), sealed_at
+            )
+        except KeyError:
+            return {"status": "no_such_incident", "incident_id": incident_id}
+        except PackRefusal as exc:
+            return {
+                "status": "refused",
+                "incident_id": incident_id,
+                "problems": exc.problems,
+            }
+        return {"status": "sealed", "pack": pack.model_dump(mode="json")}
+    if action == "get_pack":
+        pack = svc.store.get_evidence_pack(payload["pack_id"])
+        if pack is None:
+            return {"status": "no_such_pack", "pack_id": payload["pack_id"]}
+        return {"status": "ok", "pack": pack.model_dump(mode="json")}
+    if action == "list_packs":
+        incident_id = payload["incident_id"]
+        if svc.store.get_incident(incident_id) is None:
+            return {"status": "no_such_incident", "incident_id": incident_id}
+        return {
+            "status": "ok",
+            "incident_id": incident_id,
+            "packs": [
+                p.model_dump(mode="json") for p in svc.packs.history(incident_id)
+            ],
+        }
+    if action == "verify_pack":
+        try:
+            problems = svc.packs.verify_pack(payload["pack_id"])
+        except KeyError:
+            return {"status": "no_such_pack", "pack_id": payload["pack_id"]}
+        return {
+            "status": "ok",
+            "pack_id": payload["pack_id"],
+            "valid": not problems,
+            "problems": problems,
         }
     if action == "ingest_and_brief":
         alarms = [Alarm.model_validate(a) for a in payload.get("alarms", [])]

@@ -2,7 +2,9 @@
 service graph the Runtime entrypoint uses.
 
 This FastAPI app is the local/operations API (ingest, alarms,
-incidents, topology versions, brief assembly, chain verification).
+incidents, topology versions, brief assembly, chain verification;
+Round 3 adds classification, memory records, priors and evidence
+pack seal/verify).
 The agent itself is invoked through the AgentCore Runtime app
 (``grid_triage.runtime_app``); this API exists so operators and
 tests can see and drive the triage work without an AWS account.
@@ -18,8 +20,13 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from grid_triage import __version__
-from grid_triage.agent import BandMismatchRefusal, CitationRefusal
+from grid_triage.agent import (
+    BandMismatchRefusal,
+    CitationRefusal,
+    PriorAttributionRefusal,
+)
 from grid_triage.models import Alarm
+from grid_triage.packs import PackRefusal
 from grid_triage.services import DuplicateAlarm
 from grid_triage.severity import SeverityRefusal
 from grid_triage.topology import TopologyView
@@ -121,6 +128,10 @@ def get_incident(incident_id: str) -> dict:
     body["memberships"] = [
         m.model_dump(mode="json") for m in s.store.list_memberships(incident_id)
     ]
+    classification = s.cause.current(incident_id)
+    body["cause_classification"] = (
+        classification.model_dump(mode="json") if classification else None
+    )
     return body
 
 
@@ -131,9 +142,129 @@ def assemble_brief(incident_id: str) -> dict:
         raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
     try:
         brief = s.assembler.assemble(incident_id, datetime.now(timezone.utc))
-    except (CitationRefusal, BandMismatchRefusal) as exc:
+    except (CitationRefusal, BandMismatchRefusal, PriorAttributionRefusal) as exc:
         raise HTTPException(status_code=422, detail={"problems": exc.problems}) from exc
     return brief.model_dump(mode="json")
+
+
+# -- Round 3: classification, memory, priors, evidence packs -----------
+
+
+@app.post("/incidents/{incident_id}/classify")
+def classify_incident(incident_id: str) -> dict:
+    s = svc()
+    try:
+        classification = s.cause.classify(incident_id, datetime.now(timezone.utc))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return classification.model_dump(mode="json")
+
+
+@app.get("/incidents/{incident_id}/classification")
+def get_classification(incident_id: str) -> dict:
+    s = svc()
+    if s.store.get_incident(incident_id) is None:
+        raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
+    classification = s.cause.current(incident_id)
+    return {
+        "incident_id": incident_id,
+        "classification": (
+            classification.model_dump(mode="json") if classification else None
+        ),
+    }
+
+
+@app.get("/incidents/{incident_id}/priors")
+def get_priors(incident_id: str) -> dict:
+    s = svc()
+    try:
+        hits = s.memory.retrieve_for_incident(
+            incident_id, datetime.now(timezone.utc)
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {
+        "incident_id": incident_id,
+        "priors": [h.model_dump(mode="json") for h in hits],
+    }
+
+
+@app.post("/memory/seed-history")
+def seed_history() -> dict:
+    records = svc().memory.load_history()
+    return {"loaded": [r.record_id for r in records], "count": len(records)}
+
+
+@app.get("/memory/records")
+def list_memory_records() -> list[dict]:
+    return [r.model_dump(mode="json") for r in svc().memory_port.list_records()]
+
+
+@app.get("/memory/records/{record_id}")
+def get_memory_record(record_id: str) -> dict:
+    record = svc().memory_port.get_record(record_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"no such memory record: {record_id}")
+    return record.model_dump(mode="json")
+
+
+class SealRequest(BaseModel):
+    sealed_by: str
+
+
+@app.post("/incidents/{incident_id}/pack/seal")
+def seal_pack(incident_id: str, request: SealRequest) -> dict:
+    s = svc()
+    try:
+        pack = s.packs.seal(
+            incident_id, request.sealed_by, datetime.now(timezone.utc)
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PackRefusal as exc:
+        raise HTTPException(status_code=422, detail={"problems": exc.problems}) from exc
+    return pack.model_dump(mode="json")
+
+
+@app.get("/incidents/{incident_id}/pack")
+def get_current_pack(incident_id: str) -> dict:
+    s = svc()
+    if s.store.get_incident(incident_id) is None:
+        raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
+    pack = s.packs.current(incident_id)
+    return {
+        "incident_id": incident_id,
+        "pack": pack.model_dump(mode="json") if pack else None,
+    }
+
+
+@app.get("/incidents/{incident_id}/packs")
+def list_packs(incident_id: str) -> dict:
+    s = svc()
+    if s.store.get_incident(incident_id) is None:
+        raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
+    return {
+        "incident_id": incident_id,
+        "packs": [p.model_dump(mode="json") for p in s.packs.history(incident_id)],
+    }
+
+
+@app.get("/packs/{pack_id}")
+def get_pack(pack_id: str) -> dict:
+    pack = svc().store.get_evidence_pack(pack_id)
+    if pack is None:
+        raise HTTPException(status_code=404, detail=f"no such evidence pack: {pack_id}")
+    return pack.model_dump(mode="json")
+
+
+@app.get("/packs/{pack_id}/verify")
+def verify_pack(pack_id: str) -> dict:
+    s = svc()
+    try:
+        problems = s.packs.verify_pack(pack_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"pack_id": pack_id, "valid": not problems, "problems": problems}
 
 
 class AssessRequest(BaseModel):
