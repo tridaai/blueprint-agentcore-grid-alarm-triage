@@ -1,0 +1,30 @@
+# Frozen dependency set for the pip fallback (make install-pip).
+# Generated from pyproject.toml with: uv pip compile pyproject.toml
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.15.1
+bedrock-agentcore==1.25.1
+boto3==1.43.120
+botocore==1.43.120
+certifi==2026.10.23
+click==8.5.0
+fastapi==0.143.0
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.20
+jmespath==1.1.0
+opentelemetry-api==1.45.1
+psycopg==3.2.9
+psycopg-binary==3.2.9
+pydantic==2.14.0
+pydantic-core==2.50.0
+python-dateutil==2.9.0.post0
+s3transfer==0.19.3
+six==1.17.0
+starlette==1.10.0
+typing-extensions==4.16.0
+typing-inspection==0.4.4
+urllib3==2.8.0
+uvicorn==0.54.0
+websockets==17.3

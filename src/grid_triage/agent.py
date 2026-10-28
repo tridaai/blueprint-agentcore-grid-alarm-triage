@@ -133,7 +133,7 @@ class OfflineComposer:
                     citations=[Citation(evidence_item_id=item_id, field="kind")],
                 )
             )
-        devices = sorted({f["device_id"] for f in facts if f["field"] == "device_id"})
+        devices = sorted({f["value"] for f in facts if f["field"] == "device_id"})
         if devices:
             first = next(f for f in facts if f["field"] == "device_id")
             statements.append(

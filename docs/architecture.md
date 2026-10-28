@@ -1,0 +1,88 @@
+# Architecture — Grid Alarm Triage & Field Work Agent
+
+## Thesis
+
+This blueprint takes the **AgentCore-native path**: the agent is an
+Amazon Bedrock AgentCore Runtime application, its tools are shaped
+for AgentCore Gateway, its guardrail law (no control of the grid)
+is designed to be enforced twice — once by construction in the
+agent's tool catalogue, and once at the platform layer by an
+AgentCore Policy pack on the Gateway (Round 11). Everything the
+domain needs that AgentCore does not provide — deterministic
+correlation, hash-chained evidence, citation-verified briefs —
+lives in the blueprint's own code, behind ports, so the local
+doubles used in tests are the same shapes the production services
+fill.
+
+## The AgentCore mapping, honestly
+
+| AgentCore service | Production role | In this repo (R1) |
+| --- | --- | --- |
+| **Runtime** | The agent's home: one microVM session per triage session, HTTP contract on port 8080 (`POST /invocations`, `GET /ping`), ARM64 container, sessions to the 8-hour envelope (storm events; hand-off at the edge is a documented pattern, not yet built) | **Real.** `grid_triage/runtime_app.py` serves the contract via the installed `bedrock-agentcore` SDK's `BedrockAgentCoreApp`; graded over ASGI transport in `tests/test_runtime_contract.py`. |
+| **Gateway** | SCADA-adjacent historian, OMS and AMI/meter systems exposed as read-only MCP targets — the single tool path | **Port-shaped.** The tool catalogue (`grid_triage/tools.py`) is the contract the Gateway targets will implement; the MCP wiring lands in Round 11. No Gateway is called in R1. |
+| **Policy** | Cedar pack on the Gateway: allow read/draft/notify, deny every control-shaped call, deny out-of-area reads; denials arrive as HTTP 200 + JSON-RPC −32002 and must be detected in code | **Designed, not yet shipped.** R1 enforces Law 1 by construction + registry scan. The pack itself is Round 11. |
+| **Memory** | Episodic memory of prior incidents per feeder/device, feeding correlation as recorded inputs | **Not in R1.** Arrives Round 3 with the evidence pack, behind the memory port. |
+| **Identity** | Operator / dispatcher / field / auditor roles; control-room caller identity on every act | **Not in R1.** Access control is Round 16; the acts R1 records (ingest, correlation, brief) are system acts by design. |
+| **Evaluations** | AgentCore Evaluations on live traces (correctness/faithfulness), sampled online | **Repo-side only in R1.** The deterministic eval gate (`evals/run_evals.py`) is the primary gate; AgentCore evaluator configs join the infra artefacts at release hardening (R20). |
+| **Observability** | OpenTelemetry traces to CloudWatch as the incident audit trail | **Shaped.** Structured JSON logs with session/incident ids (`grid_triage/logging_config.py`); the console trace timeline is Round 13. |
+| **Bedrock models** | The model behind the agent step (Strands `BedrockModel`) | **Port.** Offline deterministic composer by default; the Bedrock profile refuses loudly until a region + model id are configured. No live call in R1's gates. |
+
+## Domain design
+
+**Alarms are evidence (Law 7).** The `alarms` table is an
+append-only ingest log with a sequence number; the store port
+exposes inserts and reads only. Re-delivery of an alarm id is
+refused whole — history is never overwritten.
+
+**Correlation is a pure function (Law 2)** of (uncorrelated alarms,
+pinned topology, versioned pack). It runs in
+`grid_triage/correlation.py` with no store access, which is what
+makes the planted-truth grading exact: feed the planted streams,
+compare membership sets. Pass 1 places anchors (protection/fault
+kinds); an anchor inside the window of an open same-feeder incident
+joins it (`anchor_joins_open_incident`) instead of opening a
+competing incident. Pass 2 joins consequence alarms, preferring
+incidents whose anchor device is in an ancestor/descendant relation
+(`hierarchy_window`) over a plain same-feeder window match
+(`feeder_window`). Comms/telemetry kinds are excluded from both
+anchoring and joining in pack v1 and stay uncorrelated with that
+recorded reason.
+
+**Topology is versioned data (Law 6).** `data/topology/v1.json` is
+loaded verbatim into `topology_versions` and indexed into
+`topology_*` tables. An incident stores its `topology_version`;
+loading is insert-once — a version, once loaded, is immutable.
+
+**Evidence chains.** When correlation forms an incident, each
+member alarm's payload is appended to the incident's hash chain
+(`grid_triage/evidence.py`) over the S3-shaped object port. The
+chain is what the brief's citations resolve against: a citation
+names an evidence item (one member alarm) and a field inside its
+payload.
+
+**The agent step** is a Strands-shaped loop behind a model port:
+facts are read from evidence, the model proposes statements, a
+citation resolver in code checks every citation, and only a fully
+resolving brief is stored. The loop's tools are the registry's
+read/draft shapes (`grid_triage/tools.py`); the registry is also
+the Law 1 enforcement point — its shapes are an enum with no
+control value, and a test scans it for control verbs.
+
+## Stores
+
+One store port, two dialects (`grid_triage/store.py`): SQLite
+locally (`./data/grid.db`), PostgreSQL in production, JSON-text
+payloads in both, numbered migrations under `migrations/{sqlite,
+postgres}/` applied by a ledger-recording runner. Object payloads
+sit behind an S3-shaped port (local directory double; Amazon S3 in
+production). The compose profile runs the production shape:
+pgvector/pgvector:pg16 + a SeaweedFS S3 gateway (service name
+`minio`, the portfolio convention).
+
+## Deployment shape
+
+The Dockerfile is a multi-stage, non-root, ARM64-noted build
+serving `grid-agent-serve` on 8080 — the AgentCore Runtime
+container contract. Locally, `make serve` binds the same contract;
+`make api` runs the operations API on 8000; `grid-agent-invoke`
+runs the exact Runtime handler in-process against the planted feed.

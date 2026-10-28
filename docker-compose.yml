@@ -1,0 +1,49 @@
+# Local full-stack profile: the Runtime app on Postgres + an
+# S3-shaped object store. Locally the agent defaults to SQLite and a
+# directory object store (see .env.example); this compose file is
+# the production-shaped stack.
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: grid
+      POSTGRES_USER: grid
+      POSTGRES_PASSWORD: grid
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  minio:
+    # SeaweedFS S3 gateway standing in for Amazon S3 locally; the
+    # service name stays `minio` (the portfolio convention for the
+    # S3-compatible endpoint).
+    image: chrislusf/seaweedfs:latest
+    command: "s3 -dir=/data"
+    volumes:
+      - s3data:/data
+    ports:
+      - "8333:8333"
+
+  agent:
+    build:
+      context: .
+      platforms:
+        - linux/arm64
+    environment:
+      DATABASE_URL: postgresql://grid:grid@db:5432/grid
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      BEDROCK_MODEL_ID: ${BEDROCK_MODEL_ID:-}
+      GRID_MODEL_PROFILE: ${GRID_MODEL_PROFILE:-offline}
+    volumes:
+      - appdata:/data
+    ports:
+      - "8080:8080"
+    depends_on:
+      - db
+      - minio
+
+volumes:
+  pgdata:
+  s3data:
+  appdata:
