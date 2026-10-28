@@ -337,6 +337,79 @@ class StormService:
             return True
         return bool(set(a_feeders) & set(b_feeders))
 
+    @staticmethod
+    def _segments(window: dict) -> list[tuple[datetime, datetime | None, list[str]]]:
+        """A window as time segments: (start, end, feeders) for
+        each act that states a scope, in declared-time order.
+        The stand-down ends the last segment at its own instant
+        (the fold reads the window closed from that instant);
+        a segment with no successor runs open-ended."""
+        acts = sorted(window["acts"], key=lambda a: a.declared_at)
+        segments: list[tuple[datetime, datetime | None, list[str]]] = []
+        for index, act in enumerate(acts):
+            if act.kind == STAND_DOWN:
+                break
+            end = (
+                acts[index + 1].declared_at
+                if index + 1 < len(acts)
+                else None
+            )
+            segments.append((act.declared_at, end, list(act.feeders)))
+        return segments
+
+    @staticmethod
+    def _time_overlap(
+        a_start: datetime,
+        a_end: datetime | None,
+        b_start: datetime,
+        b_end: datetime | None,
+    ) -> bool:
+        """Half-open interval overlap; a None end is open-ended."""
+        if a_end is not None and b_start >= a_end:
+            return False
+        if b_end is not None and a_start >= b_end:
+            return False
+        return True
+
+    def _scope_conflicts(
+        self,
+        feeders: list[str],
+        from_at: datetime,
+        until: datetime | None,
+        ignore_declaration_id: str | None = None,
+    ) -> list[dict]:
+        """Every recorded window segment the scope ``feeders``
+        over [from_at, until) would collide with — the check
+        Round 10's red team made necessary: judging overlap only
+        at an act's own instant let a backdated declaration, and
+        an extension widening onto a neighbour's scope, put two
+        windows over one feeder, leaving the fold to name
+        whichever was recorded first."""
+        conflicts: list[dict] = []
+        for window in self._windows():
+            declare = window["declare"]
+            if declare.declaration_id == ignore_declaration_id:
+                continue
+            for seg_start, seg_end, seg_feeders in self._segments(window):
+                if not self._time_overlap(from_at, until, seg_start, seg_end):
+                    continue
+                if not self._scopes_overlap(feeders, seg_feeders):
+                    continue
+                shared = (
+                    sorted(set(feeders) & set(seg_feeders))
+                    if feeders and seg_feeders
+                    else ["the whole territory"]
+                )
+                conflicts.append(
+                    {
+                        "declaration_id": declare.declaration_id,
+                        "declared_by": declare.declared_by,
+                        "shared": shared,
+                    }
+                )
+                break
+        return conflicts
+
     def declare(
         self,
         declared_by: str,
@@ -348,18 +421,13 @@ class StormService:
     ) -> StormDeclaration:
         feeders = list(feeders or [])
         problems = self._actor_problems(declared_by, role, reason, "declaration")
-        for window in self._windows():
-            if not self._open_window_at(window, declared_at):
-                continue
-            head = self._fold_at(window, declared_at)
-            assert head is not None
-            if self._scopes_overlap(feeders, head.feeders):
-                problems.append(
-                    f"storm mode is already declared over this scope by "
-                    f"{window['declare'].declared_by} (declaration "
-                    f"{window['declare'].declaration_id}) — extend that "
-                    "declaration or stand it down first"
-                )
+        for conflict in self._scope_conflicts(feeders, declared_at, None):
+            problems.append(
+                f"storm mode is already declared over this scope by "
+                f"{conflict['declared_by']} (declaration "
+                f"{conflict['declaration_id']}) — extend that "
+                "declaration or stand it down first"
+            )
         if problems:
             raise StormRefusal(problems)
         body = {
@@ -437,6 +505,37 @@ class StormService:
                     f"storm window {declaration_id} is not open at "
                     f"{declared_at.isoformat()}"
                 )
+            if head is not None:
+                # Round 10 red team: an extension restates the
+                # scope from its instant on — widening it onto a
+                # scope another open window covers would put two
+                # windows over one feeder. The declaration door
+                # has always refused that; the extension door
+                # now checks the same way, over the recorded
+                # timeline rather than at one instant.
+                new_feeders = (
+                    list(feeders) if feeders is not None else list(head.feeders)
+                )
+                window_end = (
+                    window["stand_down"].declared_at
+                    if window["stand_down"] is not None
+                    else None
+                )
+                for conflict in self._scope_conflicts(
+                    new_feeders,
+                    declared_at,
+                    window_end,
+                    ignore_declaration_id=declaration_id,
+                ):
+                    problems.append(
+                        "the extension would put this window's scope "
+                        f"over {', '.join(conflict['shared'])} from "
+                        f"{declared_at.isoformat()} — storm window "
+                        f"{conflict['declaration_id']} (declared by "
+                        f"{conflict['declared_by']}) already covers "
+                        "that scope then; stand it down or narrow "
+                        "the extension"
+                    )
         if problems:
             raise StormRefusal(problems)
         assert head is not None
