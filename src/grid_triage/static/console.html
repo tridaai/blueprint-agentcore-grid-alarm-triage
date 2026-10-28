@@ -1,0 +1,449 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kestrel Power &amp; Light — Grid Operations Console</title>
+<style>
+  :root {
+    --ink: #0A0A0A;
+    --muted: #5D6472;
+    --line: #E4E4EC;
+    --panel: #F7F7FA;
+    --indigo: #4F46E5;
+    --indigo-dark: #3730A3;
+    --lavender: #EEF0FF;
+    --good: #087443;
+    --warn: #B54708;
+    --bad: #B42318;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    color: var(--ink);
+    background: #fff;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    line-height: 1.45;
+  }
+  a { color: var(--indigo); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  header {
+    border-bottom: 1px solid var(--line);
+    padding: 22px clamp(18px, 4vw, 48px);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+  }
+  .brand { display: flex; align-items: center; gap: 16px; }
+  .brand img { width: 54px; height: 54px; border-radius: 14px; }
+  h1 { margin: 0; font-size: clamp(24px, 3vw, 38px); letter-spacing: -0.03em; }
+  h2 { margin: 0 0 14px; font-size: 22px; letter-spacing: -0.02em; }
+  h3 { margin: 22px 0 10px; font-size: 17px; }
+  .subtitle, .muted { color: var(--muted); }
+  .subtitle { margin: 3px 0 0; }
+  main { padding: 24px clamp(18px, 4vw, 48px) 42px; max-width: 1500px; margin: 0 auto; }
+  .tabs, .band-grid, .metric-grid { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; }
+  .tabs { margin: 18px 0; }
+  .tabs button {
+    border: 1px solid var(--indigo); background: #fff; color: var(--indigo);
+    border-radius: 9px; padding: 9px 13px; font: inherit; font-weight: 700; cursor: pointer;
+  }
+  .tabs button.active { background: var(--ink); border-color: var(--ink); color: #fff; }
+  .view { display: none; }
+  .view.active { display: block; }
+  .band-grid, .metric-grid { align-items: stretch; margin-bottom: 18px; }
+  .band-card, .metric {
+    border: 1px solid var(--line); border-radius: 13px; padding: 13px; min-width: 126px;
+    background: #fff;
+  }
+  .band-card strong, .metric strong { display: block; font-size: 26px; line-height: 1; }
+  .band-card span, .metric span { color: var(--muted); font-size: 13px; }
+  .metric { min-width: 190px; background: var(--lavender); border-color: #D9DCFF; }
+  .storm-banner {
+    border: 1px solid var(--bad); background: #FDECEA; color: var(--bad);
+    border-radius: 13px; padding: 14px 16px; margin-bottom: 18px; font-weight: 650;
+  }
+  .storm-banner.normal {
+    border-color: var(--line); background: var(--panel); color: var(--muted); font-weight: 500;
+  }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 13px; margin: 10px 0 20px; }
+  table { width: 100%; border-collapse: collapse; min-width: 760px; }
+  th, td { padding: 10px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+  th { background: var(--panel); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: #434A59; }
+  tr:last-child td { border-bottom: 0; }
+  .pill {
+    display: inline-block; padding: 2px 8px; border-radius: 999px; background: var(--lavender);
+    color: var(--indigo-dark); font-size: 12px; font-weight: 750; white-space: nowrap;
+  }
+  .pill.good { background: #E7F6EE; color: var(--good); }
+  .pill.warn { background: #FFF3E5; color: var(--warn); }
+  .pill.bad { background: #FDECEA; color: var(--bad); }
+  .empty { color: var(--muted); border: 1px dashed #CFCFDB; border-radius: 12px; padding: 16px; }
+  .notice { border-radius: 11px; padding: 11px 13px; margin: 12px 0; display: none; }
+  .notice.show { display: block; }
+  .notice.error { background: #FDECEA; color: var(--bad); }
+  .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
+  .fact { border: 1px solid var(--line); border-radius: 11px; padding: 10px; background: #fff; }
+  .fact span { display: block; color: var(--muted); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
+  footer {
+    border-top: 1px solid var(--line); padding: 24px clamp(18px, 4vw, 48px);
+    display: flex; justify-content: space-between; gap: 22px; flex-wrap: wrap; align-items: center;
+  }
+  .footer-brand { display: flex; align-items: center; gap: 12px; }
+  .footer-brand img { width: 38px; height: 38px; border-radius: 10px; }
+  .footer-links { display: flex; gap: 18px; flex-wrap: wrap; }
+  @media (max-width: 720px) {
+    header { display: block; }
+    .brand { margin-bottom: 12px; }
+    table { min-width: 680px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <img src="https://trida.ai/logos-rounded/trida-rounded.png" alt="Trida AI">
+    <div>
+      <h1>Grid Operations Console</h1>
+      <p class="subtitle">Kestrel Power &amp; Light · the control room board, assembled from artefacts of record</p>
+    </div>
+  </div>
+  <span class="pill">Read-only board</span>
+</header>
+
+<main>
+  <div id="stormBanner"></div>
+  <div id="notice" class="notice" role="status"></div>
+
+  <nav class="tabs" aria-label="Console views">
+    <button type="button" data-view="board" class="active">Incident board</button>
+    <button type="button" data-view="feeders">Feeders</button>
+    <button type="button" data-view="etr">ETR board</button>
+    <button type="button" data-view="work">Work &amp; approvals</button>
+    <button type="button" data-view="handover">Shift handover</button>
+  </nav>
+
+  <section id="view-board" class="view active">
+    <h2>Open incidents by severity</h2>
+    <div id="bandGrid" class="band-grid"></div>
+    <div id="incidentTable"></div>
+  </section>
+
+  <section id="view-feeders" class="view">
+    <h2>Feeder board</h2>
+    <div id="feederTable"></div>
+  </section>
+
+  <section id="view-etr" class="view">
+    <h2>ETR board</h2>
+    <p class="muted">Every estimate carries its basis on its face. A not-computable estimate names the input it is missing; the board never repeats a stale figure or invents a clock time.</p>
+    <div id="etrTable"></div>
+  </section>
+
+  <section id="view-work" class="view">
+    <h2>Approvals pending</h2>
+    <div id="approvalView"></div>
+    <h2>Work-order queue</h2>
+    <p class="muted">Work orders are drafts until a named operator approves them. Approval drafts the crew and customer notifications — drafts, marked as drafts, and never sent. This page holds no surface that could send one.</p>
+    <div id="workOrderTable"></div>
+    <h2>Restorations not yet confirmed</h2>
+    <div id="restorationTable"></div>
+  </section>
+
+  <section id="view-handover" class="view">
+    <h2>Shift handover</h2>
+    <div id="handoverView"></div>
+    <h2>ETR accuracy snapshot</h2>
+    <div id="accuracyView"></div>
+  </section>
+</main>
+
+<footer>
+  <div>
+    <div class="footer-brand">
+      <img src="https://trida.ai/logos-rounded/trida-rounded.png" alt="Trida AI">
+      <strong>Trida AI</strong>
+    </div>
+    <p class="muted">Every figure on this page is a read over artefacts of record returned by the API. The console holds no control surface, no send surface and no state of its own: it cannot operate the grid, and nothing on it is sent anywhere.</p>
+  </div>
+  <div class="footer-links">
+    <a href="https://trida.ai/">Visit Trida AI →</a>
+    <a href="https://github.com/tridaai">View all blueprints →</a>
+  </div>
+</footer>
+
+<script>
+"use strict";
+
+let DATA = null;
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>'"]/g, (ch) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;"
+  }[ch]));
+}
+
+function pill(text, tone = "") {
+  return `<span class="pill ${escapeHtml(tone)}">${escapeHtml(text)}</span>`;
+}
+
+function bandTone(band) {
+  if (band === "SEV-1") return "bad";
+  if (band === "SEV-2") return "warn";
+  if (band === "SEV-3" || band === "SEV-4") return "good";
+  return "";
+}
+
+function buildBoardModel(data) {
+  return {
+    openIncidentCount: (data.incidents || []).length,
+    bandCounts: data.incident_counts_by_band || {},
+    stormActive: Boolean(data.storm && data.storm.active),
+    stormDeclarationIds: ((data.storm || {}).windows || []).map((w) => w.declaration_id),
+    etrRows: (data.etr || []).map((row) => ({
+      incident_id: row.incident_id,
+      status: row.status,
+      basis: row.basis,
+      total_minutes: row.total_minutes,
+      estimated_restored_at: row.estimated_restored_at
+    })),
+    workOrderStates: Object.fromEntries(
+      (data.work_orders || []).map((row) => [row.order_id, row.state])
+    ),
+    pendingApprovalCount: data.pending_approval_count || 0,
+    feederOpenCounts: Object.fromEntries(
+      (data.feeders || []).map((row) => [row.feeder_id, row.open_incident_count])
+    ),
+    unconfirmedRestorationCount: (data.unconfirmed_restorations || []).length
+  };
+}
+
+function renderStormBanner(data) {
+  const storm = data.storm || { active: false, windows: [] };
+  if (!storm.active) {
+    return `<div class="storm-banner normal">Normal operations — no storm declaration is in force. Storm mode exists only as a named operator's recorded act; volume alone never declares it.</div>`;
+  }
+  const windows = storm.windows.map((w) => `
+    <div>STORM MODE — declared by ${escapeHtml(w.declared_by)} · declaration ${escapeHtml(w.declaration_id)} · scope ${escapeHtml((w.feeders || []).length ? w.feeders.join(", ") : "whole territory")}${w.region ? ` · ${escapeHtml(w.region)}` : ""}<br>
+    <span>${escapeHtml(w.reason)}</span></div>`).join("");
+  return `<div class="storm-banner">${windows}</div>`;
+}
+
+function renderBandGrid(data) {
+  const counts = data.incident_counts_by_band || {};
+  const bands = Object.keys(counts).sort();
+  if (!bands.length) return `<div class="empty">No open incidents.</div>`;
+  return bands.map((band) => `
+    <div class="band-card" data-band="${escapeHtml(band)}"><strong>${counts[band]}</strong><span>${escapeHtml(band)}</span></div>
+  `).join("");
+}
+
+function modeStamp(row) {
+  if (row.operating_mode === "storm") {
+    return `${pill("storm", "bad")}<br><span class="muted">declaration ${escapeHtml(row.storm_declaration_id)}</span>`;
+  }
+  return pill("normal", "good");
+}
+
+function renderIncidents(data) {
+  const rows = data.incidents || [];
+  if (!rows.length) return `<div class="empty">No open incidents on record.</div>`;
+  const body = rows.map((row) => `
+    <tr data-incident-id="${escapeHtml(row.incident_id)}">
+      <td><strong>${escapeHtml(row.incident_id)}</strong><br><span class="muted">anchor ${escapeHtml(row.anchor_alarm_id)}</span></td>
+      <td>${escapeHtml(row.feeder_id)}<br><span class="muted">${escapeHtml(row.substation_id)}</span></td>
+      <td>${pill(row.band, bandTone(row.band))}<br><span class="muted">score ${row.score === null ? "—" : escapeHtml(row.score)}</span></td>
+      <td>${modeStamp(row)}</td>
+      <td>${escapeHtml(row.cause_class || "not yet classified")}</td>
+      <td>${escapeHtml(row.member_alarm_count)} alarms</td>
+      <td>${escapeHtml(row.created_at)}</td>
+    </tr>`).join("");
+  return `<div class="table-wrap"><table><thead><tr><th>Incident</th><th>Feeder</th><th>Severity</th><th>Mode</th><th>Cause</th><th>Membership</th><th>Created</th></tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
+function renderFeeders(data) {
+  const rows = data.feeders || [];
+  if (!rows.length) return `<div class="empty">No feeders on record.</div>`;
+  const body = rows.map((row) => `
+    <tr data-feeder-id="${escapeHtml(row.feeder_id)}">
+      <td><strong>${escapeHtml(row.feeder_id)}</strong><br><span class="muted">${escapeHtml(row.name)}</span></td>
+      <td>${escapeHtml(row.substation_id)}</td>
+      <td>${escapeHtml(row.device_count)}</td>
+      <td>${escapeHtml(row.open_incident_count)}</td>
+      <td>${escapeHtml(row.uncorrelated_alarm_count)}</td>
+      <td>${row.operating_mode === "storm" ? pill("storm", "bad") : pill("normal", "good")}${row.storm_declaration_id ? `<br><span class="muted">${escapeHtml(row.storm_declaration_id)}</span>` : ""}</td>
+    </tr>`).join("");
+  return `<div class="table-wrap"><table><thead><tr><th>Feeder</th><th>Substation</th><th>Devices</th><th>Open incidents</th><th>Uncorrelated alarms</th><th>Mode</th></tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
+function renderEtr(data) {
+  const rows = data.etr || [];
+  if (!rows.length) return `<div class="empty">No open incidents, so no estimates to show.</div>`;
+  const body = rows.map((row) => {
+    let basisCell;
+    if (row.status === "computed") {
+      basisCell = `${pill("computed", "good")}<br><span class="muted">basis: ${escapeHtml(row.basis)}</span>`;
+    } else if (row.status === "not_computable") {
+      basisCell = `${pill("not computable", "warn")}<br><span class="muted">missing: ${escapeHtml((row.missing_inputs || []).join(", "))}</span>`;
+    } else {
+      basisCell = pill("no estimate", "");
+    }
+    return `
+    <tr data-incident-id="${escapeHtml(row.incident_id)}">
+      <td><strong>${escapeHtml(row.incident_id)}</strong><br><span class="muted">${escapeHtml(row.feeder_id)}</span></td>
+      <td>${basisCell}</td>
+      <td>${row.total_minutes === null ? "—" : `${escapeHtml(row.total_minutes)} min`}</td>
+      <td>${escapeHtml(row.estimated_restored_at || "—")}</td>
+      <td>${escapeHtml(row.operating_mode)}</td>
+    </tr>`;
+  }).join("");
+  return `<div class="table-wrap"><table><thead><tr><th>Incident</th><th>Estimate &amp; basis</th><th>Total</th><th>Estimated restoration</th><th>Mode</th></tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
+function statePill(row) {
+  if (row.state === "draft") return pill("DRAFT — awaiting a named operator's decision", "warn");
+  if (row.state === "approved") return pill(row.completed ? "approved · completed" : "approved", "good");
+  return pill(row.state, "");
+}
+
+function renderWorkOrders(data) {
+  const rows = data.work_orders || [];
+  if (!rows.length) return `<div class="empty">No open work orders.</div>`;
+  const body = rows.map((row) => `
+    <tr data-order-id="${escapeHtml(row.order_id)}">
+      <td><strong>${escapeHtml(row.order_id)}</strong><br><span class="muted">version ${escapeHtml(row.version)} · drafted by ${escapeHtml(row.drafted_by)}</span></td>
+      <td>${escapeHtml(row.incident_id)}</td>
+      <td>${statePill(row)}</td>
+      <td>${escapeHtml(row.assigned_crew_id || "—")}</td>
+      <td>${escapeHtml(row.notifications_drafted)} drafted, none sent</td>
+    </tr>`).join("");
+  return `<div class="table-wrap"><table><thead><tr><th>Work order</th><th>Incident</th><th>State</th><th>Crew</th><th>Notifications</th></tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
+function renderApprovals(data) {
+  const pending = data.pending_approvals || { severity_acknowledgements: [], work_order_decisions: [] };
+  const acks = pending.severity_acknowledgements || [];
+  const decisions = pending.work_order_decisions || [];
+  const ackRows = acks.map((row) => `
+    <tr><td>${escapeHtml(row.incident_id)}</td><td>${pill(row.band, bandTone(row.band))}</td><td>${escapeHtml(row.assessment_id)}</td><td>severity acknowledgement</td></tr>`).join("");
+  const decisionRows = decisions.map((row) => `
+    <tr><td>${escapeHtml(row.incident_id)}</td><td>${pill("DRAFT", "warn")}</td><td>${escapeHtml(row.order_id)}</td><td>work-order decision</td></tr>`).join("");
+  if (!acks.length && !decisions.length) {
+    return `<div class="empty">Nothing is waiting for a named decision.</div>`;
+  }
+  return `<div class="metric-grid"><div class="metric"><strong>${acks.length + decisions.length}</strong><span>Decisions pending</span></div></div>
+  <div class="table-wrap"><table><thead><tr><th>Incident</th><th>Band / state</th><th>Artefact</th><th>Awaiting</th></tr></thead><tbody>${ackRows}${decisionRows}</tbody></table></div>`;
+}
+
+function renderRestorations(data) {
+  const rows = data.unconfirmed_restorations || [];
+  if (!rows.length) return `<div class="empty">No restoration is waiting on confirmation.</div>`;
+  const body = rows.map((row) => `
+    <tr data-incident-id="${escapeHtml(row.incident_id)}">
+      <td><strong>${escapeHtml(row.incident_id)}</strong></td>
+      <td>${pill(row.confirmation_status, "warn")}</td>
+      <td>${escapeHtml(row.signal_count)} signals</td>
+      <td>${row.restored_customers === null ? "—" : escapeHtml(row.restored_customers)} restored · ${row.outstanding_customers === null ? "—" : escapeHtml(row.outstanding_customers)} outstanding</td>
+      <td>${escapeHtml((row.missing_classes || []).join(", ") || "—")}</td>
+    </tr>`).join("");
+  return `<div class="table-wrap"><table><thead><tr><th>Incident</th><th>Confirmation</th><th>Signals</th><th>Customers</th><th>Missing classes</th></tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
+function fact(label, value) {
+  return `<div class="fact"><span>${escapeHtml(label)}</span>${escapeHtml(value ?? "—")}</div>`;
+}
+
+function renderHandover(data) {
+  const handover = data.handover;
+  if (!handover) return `<div class="empty">No shift handover has been assembled yet.</div>`;
+  const sections = handover.sections || {};
+  const pending = sections.pending_approvals || {};
+  const pendingCount = (pending.severity_acknowledgements || []).length + (pending.work_order_decisions || []).length;
+  const acceptance = handover.acceptance
+    ? `Accepted by ${handover.acceptance.accepted_by} at ${handover.acceptance.accepted_at}`
+    : "Not yet accepted";
+  const stale = handover.stale
+    ? `${pill("STALE", "bad")}<br><span class="muted">${escapeHtml((handover.drift || []).join("; "))}</span>`
+    : pill("current", "good");
+  return `
+    <div class="facts">
+      ${fact("Handover", handover.handover_id)}
+      ${fact("Handed over by", `${handover.handed_over_by} (${handover.role})`)}
+      ${fact("Handed over at", handover.handed_over_at)}
+      ${fact("Record hash", handover.record_hash)}
+      ${fact("Open incidents", (sections.open_incidents || []).length)}
+      ${fact("Decisions pending", pendingCount)}
+      ${fact("Open work orders", (sections.open_work_orders || []).length)}
+      ${fact("Unconfirmed restorations", (sections.unconfirmed_restorations || []).length)}
+      ${fact("Storm at handover", sections.storm && sections.storm.active ? "storm" : "normal")}
+    </div>
+    <p>${escapeHtml(acceptance)}</p>
+    <p>${stale}</p>`;
+}
+
+function renderAccuracy(data) {
+  const ledger = data.etr_accuracy || {};
+  const overall = ledger.overall || {};
+  const modeRows = (ledger.by_operating_mode || []).map((row) => `
+    <tr><td>${escapeHtml(row.operating_mode)}</td><td>${escapeHtml(row.compared_count)}</td><td>${row.mean_signed_error_minutes === null ? "—" : escapeHtml(row.mean_signed_error_minutes)}</td><td>${escapeHtml(row.unestimated_closures)}</td></tr>`).join("");
+  return `
+    <div class="metric-grid">
+      <div class="metric"><strong>${escapeHtml(overall.compared_count ?? 0)}</strong><span>Compared outcomes, all modes</span></div>
+      <div class="metric"><strong>${escapeHtml(ledger.unestimated_closures ?? 0)}</strong><span>Closures with no estimate</span></div>
+    </div>
+    <div class="table-wrap"><table><thead><tr><th>Operating mode</th><th>Compared</th><th>Mean signed error (min)</th><th>Unestimated closures</th></tr></thead><tbody>${modeRows || `<tr><td colspan="4">No outcomes recorded yet.</td></tr>`}</tbody></table></div>`;
+}
+
+function renderAll() {
+  document.getElementById("stormBanner").innerHTML = renderStormBanner(DATA);
+  document.getElementById("bandGrid").innerHTML = renderBandGrid(DATA);
+  document.getElementById("incidentTable").innerHTML = renderIncidents(DATA);
+  document.getElementById("feederTable").innerHTML = renderFeeders(DATA);
+  document.getElementById("etrTable").innerHTML = renderEtr(DATA);
+  document.getElementById("approvalView").innerHTML = renderApprovals(DATA);
+  document.getElementById("workOrderTable").innerHTML = renderWorkOrders(DATA);
+  document.getElementById("restorationTable").innerHTML = renderRestorations(DATA);
+  document.getElementById("handoverView").innerHTML = renderHandover(DATA);
+  document.getElementById("accuracyView").innerHTML = renderAccuracy(DATA);
+}
+
+function showNotice(text) {
+  const notice = document.getElementById("notice");
+  notice.textContent = text;
+  notice.className = "notice show error";
+}
+
+async function refresh() {
+  const response = await fetch("/console/data");
+  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+  DATA = await response.json();
+  renderAll();
+}
+
+if (typeof document !== "undefined") {
+  document.querySelectorAll(".tabs button").forEach((button) => {
+    button.addEventListener("click", () => {
+      document.querySelectorAll(".tabs button").forEach((b) => b.classList.toggle("active", b === button));
+      document.querySelectorAll(".view").forEach((view) => view.classList.toggle("active", view.id === `view-${button.dataset.view}`));
+    });
+  });
+  refresh().catch((error) => showNotice(error.message));
+}
+
+globalThis.GridConsole = {
+  buildBoardModel,
+  renderStormBanner,
+  renderBandGrid,
+  renderIncidents,
+  renderFeeders,
+  renderEtr,
+  renderWorkOrders,
+  renderApprovals,
+  renderRestorations,
+  renderHandover,
+  renderAccuracy
+};
+</script>
+</body>
+</html>
