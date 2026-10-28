@@ -1,7 +1,7 @@
 -- 0006: Round 6 — field updates (insert-only artefacts against an
 -- incident), topology version declaration acts, and incident
 -- revision records (re-correlation under a newer topology version
--- produces a new incident row linked by one of these records; the
+-- produces a new incident row linked by one of these records. The
 -- prior incident row is never touched). Payloads stay JSON text,
 -- exactly as in the earlier migrations.
 CREATE TABLE IF NOT EXISTS field_updates (
