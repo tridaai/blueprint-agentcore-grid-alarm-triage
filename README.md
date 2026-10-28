@@ -181,6 +181,49 @@ programme.
   Runtime invocation handler and the CLI. The demo now walks the
   flood through estimate → closure → ledger.
 
+## What Round 5 builds
+
+- **Work-order drafting** (`grid_triage/work_orders.py`): a
+  draft is derived in code from the records — scope from the
+  classification of record and the affected devices on the
+  incident's pinned topology, safety notes and materials from a
+  versioned **work pack** (2026.10.1), the crew qualification
+  stated in the roster's skill vocabulary, and the R4 ETR
+  estimate pinned by id. What the data cannot supply is named
+  in `gaps`: an unclassified incident's draft states no
+  qualification, because there is no honest skill for "not yet
+  diagnosed". A draft authorises nothing, and drafts are
+  content-addressed versions — a change is a new version
+  superseding by link, never an edit.
+- **Assignment as a recorded act**: an operator assigns a named
+  crew and a work window; the checks run in code — the crew
+  must carry the draft's stated qualification on the roster,
+  and must not already be committed, on the roster artefact or
+  on another open work order, over the window (a refusal names
+  the conflicting commitment or assignment). The draft the act
+  names stays byte-identical.
+- **The operator approval gate (Law 5)**: approval is a named
+  operator's act in a pack-stated role, against the current
+  version only, and it pins that exact version — a later
+  revision stands in draft and needs its own assignment and
+  approval, while the approval stays on the version it decided.
+  The operator who drafted or last revised a version cannot
+  approve it (a system draft has no human drafter, so any named
+  operator may). Approval requires a crew assignment; rejection
+  requires its reason, and a rejected version cannot be approved
+  afterwards — the way forward is a new version.
+- **Notifications are drafts (Law 1)**: approval drafts the
+  field-crew and customer notifications as records whose own
+  text marks them unsent, quoting the pinned ETR only with its
+  basis label. There is no send surface — the eval gate scans
+  the routes, the Runtime actions and every function name for
+  one.
+- Migration 0005 (both dialects), and work-order surfaces at
+  parity across the operations API, the Runtime invocation
+  handler and the CLI. The demo now walks the flood's order
+  through draft → refused assignment → revision → assignment →
+  refused self-approval → approval → drafted notifications.
+
 ## Quick start
 
 ```bash
@@ -211,9 +254,14 @@ What is built and what is not, plainly:
   versioned roster, and every ETR carries its basis —
   `computed_from_rates`, or `not_computable` naming the missing
   input; closures grade the estimates into an accuracy ledger.
-  **Work orders are Round 5, the operator approval gate Round 6,
-  storm mode Round 9.** The agent estimates, briefs and seals
-  packs and stops; nobody is dispatched and nothing is approved.
+- **Work orders are drafts with an operator gate (Round 5)**:
+  the system drafts, assigns and records; only a named
+  operator's approval act — role-checked, never the drafter of
+  a human-touched version — moves a version to approved, and
+  the notifications it produces are drafts, never sent. Field
+  updates and re-correlation are Round 7, restoration
+  confirmation Round 8, storm mode Round 9. Nothing here
+  dispatches a crew in the world; it records who decided what.
 - **The AgentCore Policy pack is Round 11.** In R1, Law 1 (no
   control) is enforced by the tool catalogue's construction and
   the registry scan; the Cedar policy pack at the Gateway is the
@@ -238,7 +286,7 @@ What is built and what is not, plainly:
 src/grid_triage/   models, topology, correlation, services (ingest),
                    evidence, store, agent, tools (Law 1 registry),
                    severity (R2), cause / memory / packs (R3),
-                   roster / etr / closure (R4),
+                   roster / etr / closure (R4), work_orders (R5),
                    runtime_app / runtime_main (AgentCore Runtime),
                    api, demo, cli, local_invoke, wiring, config
 data/topology/     versioned territory data (v1.json)

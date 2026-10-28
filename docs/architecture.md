@@ -132,6 +132,30 @@ with as_of ≤ restored_at), and the accuracy ledger derives its
 per-class means from the recorded outcomes — the track record a
 brief may quote is the one the ledger recorded, nothing else.
 
+**Work orders are drafts; assignment and approval are acts
+(R5).** A work order (`grid_triage/work_orders.py`) is derived in
+code from the incident's records under a versioned work pack:
+scope from the classification of record, affected devices and
+per-kind safety notes from the pinned topology, materials and
+the required crew qualification (in the roster's skill
+vocabulary) per cause class, and the current ETR estimate pinned
+by id. Unsupportable statements are named in `gaps` rather than
+filled — an unclassified incident states no qualification, and
+so cannot be assigned. Drafts are content-addressed versions
+superseding by link; their state is *derived* from the decision
+acts, never stored on the draft, so the artefact an approval
+pins cannot drift. Assignment is a recorded act checked in code
+(qualification on the roster; no double-booking against roster
+commitments or other open orders' current assignments — a
+superseded version's assignment dies with it). Approval is a
+named operator's act in a pack-stated role against the current
+version only, refused to the operator who drafted or last
+revised that version, and it requires a live assignment;
+rejection requires a reason and closes the version. Approval
+drafts the field and customer notifications as records marked
+unsent in their own text — the notify shape has no send surface
+anywhere in the package, and the eval gate scans for one.
+
 ## Stores
 
 One store port, two dialects (`grid_triage/store.py`): SQLite
