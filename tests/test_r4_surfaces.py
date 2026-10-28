@@ -9,11 +9,12 @@ from fastapi.testclient import TestClient
 
 import grid_triage.api as api
 import grid_triage.runtime_app as runtime_app
-from grid_triage.seed import T0
+from grid_triage.seed import T0, lone_alarms
 
 FLOOD = "INC-ALM-FLD-001"
 LONE = "INC-ALM-LONE-001"
 AS_OF = (T0 + timedelta(minutes=30)).isoformat()
+LONE_AS_OF = (lone_alarms()[0].raised_at + timedelta(minutes=15)).isoformat()
 RESTORED = (T0 + timedelta(minutes=270)).isoformat()
 SUMMARY = "Vegetation crew cleared the tree contact at REC-071; Feeder 7 restored."
 
@@ -41,7 +42,7 @@ def test_api_etr_lifecycle(client):
     assert len(read["history"]) == 1
 
     lone = client.post(
-        f"/incidents/{LONE}/etr/estimate", json={"as_of": AS_OF}
+        f"/incidents/{LONE}/etr/estimate", json={"as_of": LONE_AS_OF}
     ).json()
     assert lone["status"] == "not_computable"
     assert lone["missing_inputs"] == ["cause_class"]
