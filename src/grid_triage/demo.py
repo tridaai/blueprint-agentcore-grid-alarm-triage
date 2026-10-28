@@ -11,7 +11,10 @@ refusals the gate exists for). Then the field reports back,
 topology v2 is declared effective, and the flood is
 re-correlated under it — the revision's diff told plainly —
 before the flood is closed so the accuracy ledger gains its
-first entry.
+first entry. The demo closes with a declared storm: storm mode
+entered by a named operator's act, a burst correlated under
+the widened rules, and the post-storm review assembled after
+stand-down.
 """
 
 from __future__ import annotations
@@ -393,6 +396,165 @@ def run_demo(settings: Settings | None = None) -> Services:
         f"— {contra_update.correlation['reason']}"
     )
     print(f"Evidence chain still valid: {svc.chain.verify_chain(flood.incident_id)}")
+
+    # Round 8: two days later a storm cell crosses the territory.
+    # Storm mode is declared by a named operator — the burst
+    # alone would never declare it.
+    storm_day = datetime(2026, 10, 16, 1, 0, tzinfo=timezone.utc)
+    declaration = svc.storm.declare(
+        "op.dana",
+        "operator",
+        "Storm cell crossing the Alder service area; damage "
+        "expected across the north feeders",
+        storm_day,
+        feeders=["FDR-07"],
+    )
+    print(
+        f"\nStorm mode declared by {declaration.declared_by} "
+        f"({declaration.declaration_id}): scope "
+        f"{declaration.feeders}, reason on the record. Before the "
+        f"act, the state read for FDR-07 was "
+        f"{svc.storm.state_at('FDR-07', storm_day - timedelta(minutes=1))['mode']}."
+    )
+    burst_t0 = storm_day + timedelta(hours=1)  # 02:00 UTC
+    svc.intake.ingest(
+        [
+            _Alarm(alarm_id="ALM-STM-001", stream_id="STREAM-SCADA-NORTH",
+                   device_id="BRK-070", feeder_id="FDR-07",
+                   kind="breaker_trip", severity="critical",
+                   raised_at=burst_t0,
+                   message="Feeder 7 breaker tripped on protection"),
+            _Alarm(alarm_id="ALM-STM-002", stream_id="STREAM-SCADA-NORTH",
+                   device_id="BRK-070", feeder_id="FDR-07",
+                   kind="relay_protection", severity="critical",
+                   raised_at=burst_t0 + timedelta(seconds=20),
+                   message="Distance relay operated, zone 1"),
+            _Alarm(alarm_id="ALM-STM-003", stream_id="STREAM-SCADA-NORTH",
+                   device_id="REC-071", feeder_id="FDR-07",
+                   kind="recloser_lockout", severity="critical",
+                   raised_at=burst_t0 + timedelta(seconds=40),
+                   message="Recloser R1 locked out after unsuccessful reclose attempts"),
+            _Alarm(alarm_id="ALM-STM-004", stream_id="STREAM-SCADA-NORTH",
+                   device_id="SEN-0722", feeder_id="FDR-07",
+                   kind="meter_ping_failure", severity="info",
+                   raised_at=burst_t0 + timedelta(minutes=5),
+                   message="Meter ping failure on SEN-0722 — AMI silent"),
+            _Alarm(alarm_id="ALM-STM-005", stream_id="STREAM-SCADA-NORTH",
+                   device_id="SEC-072", feeder_id="FDR-07",
+                   kind="voltage_sag", severity="major",
+                   raised_at=burst_t0 + timedelta(minutes=12),
+                   message="Voltage sag reported by SEC-072"),
+            _Alarm(alarm_id="ALM-STM-006", stream_id="STREAM-SCADA-NORTH",
+                   device_id="SEC-073", feeder_id="FDR-07",
+                   kind="phase_loss", severity="major",
+                   raised_at=burst_t0 + timedelta(minutes=20),
+                   message="Phase loss reported by SEC-073"),
+        ]
+    )
+    storm_created = svc.correlator.correlate_new(svc.topology)
+    storm_incident = next(
+        i for i in storm_created if i.anchor_alarm_id == "ALM-STM-001"
+    )
+    storm_members = svc.store.list_memberships(storm_incident.incident_id)
+    print(
+        f"Storm burst correlated as {storm_incident.incident_id}: "
+        f"{len(storm_members)} alarms — the sag at +12 min joins "
+        "only through the declared window (1800s, not 600s), and "
+        "the meter ping joins only because the storm pack names "
+        f"it joinable. Stamp on its face: mode "
+        f"{storm_incident.operating_mode}, storm pack "
+        f"{storm_incident.storm_pack_version}, declaration "
+        f"{storm_incident.storm_declaration_id}."
+    )
+    storm_estimate = svc.etr.estimate(
+        storm_incident.incident_id, burst_t0 + timedelta(minutes=30)
+    )
+    storm_components = {
+        c["name"]: c["minutes"] for c in storm_estimate.components
+    }
+    print(
+        f"Storm ETR (mode {storm_estimate.operating_mode}): "
+        f"restoration {storm_estimate.estimated_restored_at} (basis: "
+        f"{storm_estimate.basis}) — base repair "
+        f"{storm_components['base_repair']} min plus "
+        f"{storm_components['storm_conditions']} min of stated "
+        "storm_conditions (the pack's 6/5 factor, its own line)."
+    )
+    extension = svc.storm.extend(
+        declaration.declaration_id,
+        "op.dana",
+        "operator",
+        "Cell widening — Feeder 3 added to the storm scope",
+        storm_day + timedelta(hours=2),
+        feeders=["FDR-07", "FDR-03"],
+    )
+    print(
+        f"Declaration extended ({extension.declaration_id}): scope "
+        f"now {extension.feeders} — from the extension's hour on; "
+        "the fold for 02:30 still shows the original scope."
+    )
+    storm_assessment = svc.severity.assess(
+        storm_incident.incident_id, burst_t0 + timedelta(minutes=90)
+    )
+    adjustments = storm_assessment.inputs["storm_adjustments"]
+    print(
+        f"Storm severity: {storm_assessment.band}, score "
+        f"{storm_assessment.score} — points "
+        f"{storm_assessment.inputs['points']}, under the pack's "
+        "stated adjustments "
+        + ", ".join(
+            f"{key} {pair['normal']}→{pair['storm']}"
+            for key, pair in adjustments.items()
+        )
+        + "."
+    )
+    _, storm_outcome, _ = svc.closure.close_incident(
+        storm_incident.incident_id,
+        "op.dana",
+        "operator",
+        burst_t0 + timedelta(minutes=400),
+        "Storm damage on Feeder 7 cleared; feeder restored after "
+        "the cell passed.",
+        recorded_at=burst_t0 + timedelta(minutes=401),
+    )
+    print(
+        f"Storm incident closed: actual "
+        f"{storm_outcome.actual_duration_minutes} min against the "
+        f"estimated {storm_outcome.estimated_duration_minutes} "
+        f"(signed error {storm_outcome.signed_error_minutes:+}) — "
+        f"the outcome records mode {storm_outcome.operating_mode}."
+    )
+    from grid_triage.storm import StormRefusal
+
+    try:
+        svc.storm.compute_review(
+            declaration.declaration_id, "op.dana", storm_day + timedelta(hours=6)
+        )
+        print("ERROR: a review was computed over an open window")
+    except StormRefusal as exc:
+        print(f"Post-storm review refused while the window is open: {exc.problems[0]}")
+    stand_down = svc.storm.stand_down(
+        declaration.declaration_id,
+        "op.dana",
+        "operator",
+        "Cell has passed; damage assessment complete",
+        storm_day + timedelta(hours=11),
+    )
+    print(
+        f"Storm mode stood down by {stand_down.declared_by} at "
+        f"{stand_down.declared_at} — the storm incident keeps its "
+        f"stamp: {svc.store.get_incident(storm_incident.incident_id).operating_mode}."
+    )
+    review = svc.storm.compute_review(
+        declaration.declaration_id, "op.dana", storm_day + timedelta(hours=11, minutes=5)
+    )
+    review_problems = svc.storm.verify_review(review.review_id)
+    print(
+        f"Post-storm review {review.review_id}: figures "
+        f"{review.figures}; verifier problems: {review_problems}."
+    )
+    ledger = svc.closure.accuracy_ledger()
+    print(f"ETR accuracy by operating mode: {ledger['by_operating_mode']}")
     return svc
 
 

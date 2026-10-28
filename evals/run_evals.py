@@ -1,4 +1,4 @@
-"""Eval gate — Rounds 1–7 (grid alarm triage agent).
+"""Eval gate — Rounds 1–8 (grid alarm triage agent).
 
 Runs the planted streams through the real service graph on a
 throwaway SQLite store and grades the R1–R5 guarantees. Every
@@ -174,6 +174,36 @@ counter is zero-tolerance unless marked otherwise:
   event_log_tamper_undetected    an export with one line's
                                  timestamp rewritten must be caught
                                  by the verifier
+  storm_state_without_declaration
+                                 a storm stamp or state with no
+                                 declaration act behind it: the
+                                 planted feed on a fresh graph,
+                                 undeclared, must stamp every
+                                 incident normal
+  storm_parameter_not_in_pack    a storm correlation grouping,
+                                 severity score or ETR figure that
+                                 the storm pack's stated values do
+                                 not reproduce — the applied
+                                 parameters must be exactly the
+                                 pack's (severity re-performs
+                                 under the merged pack and not
+                                 under the normal one)
+  storm_unlabelled_artefacts     a storm incident, assessment,
+                                 estimate or outcome missing its
+                                 mode, pack version or declaration
+                                 on its face
+  storm_blended_accuracy         the accuracy ledger's mode rows
+                                 disagreeing with the outcomes on
+                                 record, or failing to sum to the
+                                 overall row — storm performance
+                                 is never inside the normal row
+  storm_review_errors            the post-storm review flow: a
+                                 review accepted over an open
+                                 window, figures that are not the
+                                 window's artefacts exactly, a
+                                 verify that is not clean, or a
+                                 tampered figure the verifier
+                                 does not name
 
 Run: uv run python evals/run_evals.py  (exit 0 = GATE: PASS)
 """
@@ -216,9 +246,16 @@ from grid_triage.seed import (  # noqa: E402
     lone_alarms,
 )
 from grid_triage.severity import (  # noqa: E402
+    SEVERITY_PACK,
     SeverityRefusal,
     band_for_score,
     compute_assessment,
+)
+from grid_triage.storm import (  # noqa: E402
+    STORM_PACK,
+    StormRefusal,
+    severity_adjustments,
+    storm_severity_pack,
 )
 from grid_triage.store import MemoryImmutableError  # noqa: E402
 from grid_triage.tools import TOOL_REGISTRY  # noqa: E402
@@ -1320,7 +1357,270 @@ def main() -> int:
         else 1
     )
 
-    print("Evals — grid alarm triage agent (Rounds 1-7)")
+    # --- Round 8: storm mode ------------------------------------
+    # Storm mode is a declared state: the fold of named acts, and
+    # nothing else. The whole planted feed on a fresh graph, with
+    # no declaration anywhere, stamps every incident normal.
+    counters["storm_state_without_declaration"] = 0
+    counters["storm_parameter_not_in_pack"] = 0
+    counters["storm_unlabelled_artefacts"] = 0
+    counters["storm_blended_accuracy"] = 0
+    counters["storm_review_errors"] = 0
+
+    tmp2 = Path(tempfile.mkdtemp(prefix="grid-evals-r8-"))
+    svc2 = Services(
+        Settings(
+            sqlite_path=str(tmp2 / "grid.db"),
+            object_store_dir=str(tmp2 / "objects"),
+        )
+    )
+    svc2.intake.ingest_feed(svc2.feed.fetch_alarms())
+    svc2.correlator.correlate_new(svc2.topology)
+    if svc2.storm.declarations():
+        counters["storm_state_without_declaration"] += 1
+    if any(
+        i.operating_mode != "normal" for i in svc2.store.list_incidents()
+    ):
+        counters["storm_state_without_declaration"] += 1
+    if svc2.storm.state_at("FDR-07", T0 + timedelta(hours=2))["mode"] != "normal":
+        counters["storm_state_without_declaration"] += 1
+
+    # A declared window over Feeder 7, and a burst shaped so the
+    # pack's deltas decide its grouping.
+    storm_t0 = datetime(2026, 10, 16, 2, 0, tzinfo=timezone.utc)
+    declaration = svc.storm.declare(
+        "op.dana",
+        "operator",
+        "Storm cell crossing the Alder service area",
+        storm_t0 - timedelta(hours=1),
+        feeders=["FDR-07"],
+    )
+    burst = [
+        Alarm(alarm_id="ALM-STME-001", stream_id="STREAM-SCADA-NORTH",
+              device_id="BRK-070", feeder_id="FDR-07", kind="breaker_trip",
+              severity="critical", raised_at=storm_t0,
+              message="Feeder 7 breaker tripped on protection"),
+        Alarm(alarm_id="ALM-STME-002", stream_id="STREAM-SCADA-NORTH",
+              device_id="BRK-070", feeder_id="FDR-07",
+              kind="relay_protection", severity="critical",
+              raised_at=storm_t0 + timedelta(seconds=20),
+              message="Distance relay operated, zone 1"),
+        Alarm(alarm_id="ALM-STME-003", stream_id="STREAM-SCADA-NORTH",
+              device_id="REC-071", feeder_id="FDR-07",
+              kind="recloser_lockout", severity="critical",
+              raised_at=storm_t0 + timedelta(seconds=40),
+              message="Recloser R1 locked out after unsuccessful reclose attempts"),
+        Alarm(alarm_id="ALM-STME-004", stream_id="STREAM-SCADA-NORTH",
+              device_id="SEN-0722", feeder_id="FDR-07",
+              kind="meter_ping_failure", severity="info",
+              raised_at=storm_t0 + timedelta(minutes=5),
+              message="Meter ping failure on SEN-0722"),
+        Alarm(alarm_id="ALM-STME-005", stream_id="STREAM-SCADA-NORTH",
+              device_id="SEC-072", feeder_id="FDR-07", kind="voltage_sag",
+              severity="major", raised_at=storm_t0 + timedelta(minutes=12),
+              message="Voltage sag reported by SEC-072"),
+        Alarm(alarm_id="ALM-STME-006", stream_id="STREAM-SCADA-NORTH",
+              device_id="SEC-073", feeder_id="FDR-07", kind="phase_loss",
+              severity="major", raised_at=storm_t0 + timedelta(minutes=20),
+              message="Phase loss reported by SEC-073"),
+    ]
+    svc.intake.ingest(burst)
+    created8 = [
+        i for i in svc.correlator.correlate_new(svc.topology)
+        if i.anchor_alarm_id == "ALM-STME-001"
+    ]
+    if len(created8) != 1:
+        counters["storm_parameter_not_in_pack"] += 1
+        storm_incident = None
+    else:
+        storm_incident = created8[0]
+    if storm_incident is not None:
+        members8 = {
+            m.alarm_id
+            for m in svc.store.list_memberships(storm_incident.incident_id)
+        }
+        if members8 != {a.alarm_id for a in burst}:
+            counters["storm_parameter_not_in_pack"] += 1
+        # The stamp names a declaration act that is on record.
+        if storm_incident.operating_mode != "storm":
+            counters["storm_unlabelled_artefacts"] += 1
+        if storm_incident.storm_pack_version != STORM_PACK["version"]:
+            counters["storm_unlabelled_artefacts"] += 1
+        if storm_incident.storm_declaration_id != declaration.declaration_id:
+            counters["storm_unlabelled_artefacts"] += 1
+        on_record = svc.storm.get_declaration(
+            storm_incident.storm_declaration_id or ""
+        )
+        if on_record is None or on_record.kind != "declare":
+            counters["storm_state_without_declaration"] += 1
+
+        # Severity re-performs under the storm-merged pack and
+        # does NOT re-perform under the normal pack: the applied
+        # parameters are exactly the pack's stated ones.
+        as_of8 = storm_t0 + timedelta(minutes=90)
+        assessment8 = svc.severity.assess(storm_incident.incident_id, as_of8)
+        alarms8 = {
+            m.alarm_id: svc.store.get_alarm(m.alarm_id)
+            for m in svc.store.list_memberships(storm_incident.incident_id)
+        }
+        storm_ctx = {
+            "pack_version": storm_incident.storm_pack_version,
+            "declaration_id": storm_incident.storm_declaration_id,
+            "adjustments": severity_adjustments(),
+        }
+        reperformed = compute_assessment(
+            storm_incident,
+            alarms8,
+            svc.topology,
+            as_of8,
+            pack=storm_severity_pack(SEVERITY_PACK),
+            storm=storm_ctx,
+        )
+        if reperformed.assessment_id != assessment8.assessment_id:
+            counters["storm_parameter_not_in_pack"] += 1
+        normal8 = compute_assessment(
+            storm_incident, alarms8, svc.topology, as_of8
+        )
+        if normal8.score == assessment8.score:
+            counters["storm_parameter_not_in_pack"] += 1
+        if assessment8.inputs.get("operating_mode") != "storm":
+            counters["storm_unlabelled_artefacts"] += 1
+        if assessment8.inputs.get("storm_declaration_id") != declaration.declaration_id:
+            counters["storm_unlabelled_artefacts"] += 1
+        if assessment8.inputs.get("storm_adjustments") != severity_adjustments():
+            counters["storm_unlabelled_artefacts"] += 1
+
+        # The ETR carries the pack's stated factor as its own
+        # component line and the mode on its face.
+        estimate8 = svc.etr.estimate(
+            storm_incident.incident_id, storm_t0 + timedelta(minutes=30)
+        )
+        components8 = {c["name"]: c["minutes"] for c in estimate8.components}
+        if components8.get("base_repair") != 150:
+            counters["storm_parameter_not_in_pack"] += 1
+        if components8.get(STORM_PACK["etr"]["component_name"]) != 30:
+            counters["storm_parameter_not_in_pack"] += 1
+        if estimate8.total_minutes != sum(components8.values()):
+            counters["storm_parameter_not_in_pack"] += 1
+        if estimate8.operating_mode != "storm":
+            counters["storm_unlabelled_artefacts"] += 1
+        if estimate8.storm_declaration_id != declaration.declaration_id:
+            counters["storm_unlabelled_artefacts"] += 1
+        if estimate8.basis != ETR_PACK["basis_label"]:
+            counters["storm_unlabelled_artefacts"] += 1
+
+        # Close it: the outcome records the mode, and the ledger
+        # keeps the modes in separate rows that sum exactly.
+        _, outcome8, _ = svc.closure.close_incident(
+            storm_incident.incident_id,
+            "op.dana",
+            "operator",
+            storm_t0 + timedelta(minutes=400),
+            "Storm damage on Feeder 7 cleared and the feeder restored.",
+            recorded_at=storm_t0 + timedelta(minutes=401),
+        )
+        if outcome8.operating_mode != "storm":
+            counters["storm_unlabelled_artefacts"] += 1
+        if outcome8.storm_declaration_id != declaration.declaration_id:
+            counters["storm_unlabelled_artefacts"] += 1
+        ledger8 = svc.closure.accuracy_ledger()
+        all_outcomes = svc.store.list_etr_outcomes()
+        for mode in ("normal", "storm"):
+            rows = [
+                r for r in ledger8["by_operating_mode"]
+                if r["operating_mode"] == mode
+            ]
+            expected_compared = sum(
+                1
+                for o in all_outcomes
+                if o.operating_mode == mode and o.status == "compared"
+            )
+            expected_unestimated = sum(
+                1
+                for o in all_outcomes
+                if o.operating_mode == mode and o.status != "compared"
+            )
+            if not rows:
+                if expected_compared or expected_unestimated:
+                    counters["storm_blended_accuracy"] += 1
+                continue
+            if rows[0]["compared_count"] != expected_compared:
+                counters["storm_blended_accuracy"] += 1
+            if rows[0]["unestimated_closures"] != expected_unestimated:
+                counters["storm_blended_accuracy"] += 1
+        if sum(
+            r["compared_count"] for r in ledger8["by_operating_mode"]
+        ) != ledger8["overall"]["compared_count"]:
+            counters["storm_blended_accuracy"] += 1
+
+        # The review: refused while the window is open, exact
+        # after stand-down, verified clean, and a tampered figure
+        # is named by the verifier.
+        try:
+            svc.storm.compute_review(
+                declaration.declaration_id,
+                "op.dana",
+                storm_t0 + timedelta(hours=5),
+            )
+            counters["storm_review_errors"] += 1
+        except StormRefusal:
+            pass
+        svc.storm.stand_down(
+            declaration.declaration_id,
+            "op.dana",
+            "operator",
+            "Cell has passed; damage assessment complete",
+            storm_t0 + timedelta(hours=10),
+        )
+        review8 = svc.storm.compute_review(
+            declaration.declaration_id,
+            "op.dana",
+            storm_t0 + timedelta(hours=10, minutes=5),
+        )
+        figures8 = review8.figures
+        if review8.incident_ids != [storm_incident.incident_id]:
+            counters["storm_review_errors"] += 1
+        if figures8.get("incident_count") != 1:
+            counters["storm_review_errors"] += 1
+        if figures8.get("incidents_by_band") != {"SEV-1": 1}:
+            counters["storm_review_errors"] += 1
+        if figures8.get("closed_incident_count") != 1:
+            counters["storm_review_errors"] += 1
+        if figures8.get("etr_compared_count") != 1:
+            counters["storm_review_errors"] += 1
+        if figures8.get(
+            "etr_mean_signed_error_minutes"
+        ) != outcome8.signed_error_minutes:
+            counters["storm_review_errors"] += 1
+        if svc.storm.verify_review(review8.review_id):
+            counters["storm_review_errors"] += 1
+        raw = sqlite3.connect(svc.settings.sqlite_path)
+        payload8 = json.loads(
+            raw.execute(
+                "SELECT payload FROM storm_reviews WHERE review_id = ?",
+                (review8.review_id,),
+            ).fetchone()[0]
+        )
+        original8 = payload8["figures"]["etr_mean_signed_error_minutes"]
+        payload8["figures"]["etr_mean_signed_error_minutes"] = 0.0
+        raw.execute(
+            "UPDATE storm_reviews SET payload = ? WHERE review_id = ?",
+            (json.dumps(payload8), review8.review_id),
+        )
+        raw.commit()
+        if not svc.storm.verify_review(review8.review_id):
+            counters["storm_review_errors"] += 1  # tamper went undetected
+        payload8["figures"]["etr_mean_signed_error_minutes"] = original8
+        raw.execute(
+            "UPDATE storm_reviews SET payload = ? WHERE review_id = ?",
+            (json.dumps(payload8), review8.review_id),
+        )
+        raw.commit()
+        raw.close()
+        if svc.storm.verify_review(review8.review_id):
+            counters["storm_review_errors"] += 1
+
+    print("Evals — grid alarm triage agent (Rounds 1-8)")
     for name, value in counters.items():
         print(f"  {name}: {value} (required 0)")
     failed = [n for n, v in counters.items() if v != 0]
