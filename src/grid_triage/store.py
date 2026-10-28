@@ -23,15 +23,26 @@ from typing import Protocol
 from grid_triage.migrations import apply_migrations
 from grid_triage.models import (
     Alarm,
+    CauseClassification,
     EvidenceItem,
+    EvidencePack,
     Incident,
     IncidentBrief,
     IncidentMembership,
     IncidentStatus,
+    MemoryRecord,
     Notification,
     SeverityAcknowledgement,
     SeverityAssessment,
 )
+
+
+class MemoryImmutableError(RuntimeError):
+    """A memory record id was re-presented with different content.
+
+    Memory records are insert-only (Round 3): the port has no
+    update and no delete for them, and an insert that would change
+    a stored record's facts is refused here, mechanically."""
 
 
 class Store(Protocol):
@@ -62,6 +73,20 @@ class Store(Protocol):
     def list_severity_acknowledgements(
         self, incident_id: str | None = None
     ) -> list[SeverityAcknowledgement]: ...
+    # cause classification (Round 3: one artefact per incident per pack)
+    def add_cause_classification(self, classification: CauseClassification) -> None: ...
+    def get_cause_classification(
+        self, incident_id: str
+    ) -> CauseClassification | None: ...
+    # memory records (Round 3: insert-only — there is deliberately
+    # no update and no delete on this port)
+    def add_memory_record(self, record: MemoryRecord) -> MemoryRecord: ...
+    def get_memory_record(self, record_id: str) -> MemoryRecord | None: ...
+    def list_memory_records(self) -> list[MemoryRecord]: ...
+    # evidence packs (Round 3: versions supersede by link, never edited)
+    def add_evidence_pack(self, pack: EvidencePack) -> None: ...
+    def get_evidence_pack(self, pack_id: str) -> EvidencePack | None: ...
+    def list_evidence_packs(self, incident_id: str) -> list[EvidencePack]: ...
     # topology index
     def load_topology(self, payload: dict, loaded_at: datetime) -> None: ...
     def get_topology_payload(self, version: str) -> dict | None: ...
@@ -422,6 +447,99 @@ class SqlStore:
             )
             for r in rows
         ]
+
+    # -- cause classification (Round 3) --------------------------------
+    def add_cause_classification(self, classification: CauseClassification) -> None:
+        self._run(
+            "INSERT INTO cause_classifications (classification_id, incident_id, payload)"
+            " VALUES (?,?,?)",
+            (
+                classification.classification_id,
+                classification.incident_id,
+                classification.model_dump_json(),
+            ),
+        )
+
+    def get_cause_classification(
+        self, incident_id: str
+    ) -> CauseClassification | None:
+        row = self._run(
+            "SELECT payload FROM cause_classifications WHERE incident_id = ?",
+            (incident_id,),
+            fetch="one",
+        )
+        return CauseClassification.model_validate(json.loads(row[0])) if row else None
+
+    # -- memory records (Round 3: insert-only) ---------------------------
+    def add_memory_record(self, record: MemoryRecord) -> MemoryRecord:
+        existing = self.get_memory_record(record.record_id)
+        if existing is not None:
+            if existing.model_dump(mode="json") != record.model_dump(mode="json"):
+                raise MemoryImmutableError(
+                    f"memory record {record.record_id} already exists with "
+                    "different facts — memory records are never rewritten"
+                )
+            return existing  # identical re-insert: a no-op, not an edit
+        self._run(
+            "INSERT INTO memory_records (record_id, incident_id, feeder_id, payload)"
+            " VALUES (?,?,?,?)",
+            (
+                record.record_id,
+                record.incident_id,
+                record.feeder_id,
+                record.model_dump_json(),
+            ),
+        )
+        return record
+
+    def get_memory_record(self, record_id: str) -> MemoryRecord | None:
+        row = self._run(
+            "SELECT payload FROM memory_records WHERE record_id = ?",
+            (record_id,),
+            fetch="one",
+        )
+        return MemoryRecord.model_validate(json.loads(row[0])) if row else None
+
+    def list_memory_records(self) -> list[MemoryRecord]:
+        rows = self._run(
+            "SELECT payload FROM memory_records ORDER BY record_id", fetch="all"
+        )
+        return [MemoryRecord.model_validate(json.loads(r[0])) for r in rows]
+
+    # -- evidence packs (Round 3) ----------------------------------------
+    def add_evidence_pack(self, pack: EvidencePack) -> None:
+        row = self._run(
+            "SELECT COALESCE(MAX(sealed_seq), 0) FROM evidence_packs", fetch="one"
+        )
+        seq = int(row[0]) + 1
+        self._run(
+            "INSERT INTO evidence_packs (pack_id, incident_id, version, sealed_seq, payload)"
+            " VALUES (?,?,?,?,?)",
+            (
+                pack.pack_id,
+                pack.incident_id,
+                pack.version,
+                seq,
+                pack.model_dump_json(),
+            ),
+        )
+
+    def get_evidence_pack(self, pack_id: str) -> EvidencePack | None:
+        row = self._run(
+            "SELECT payload FROM evidence_packs WHERE pack_id = ?",
+            (pack_id,),
+            fetch="one",
+        )
+        return EvidencePack.model_validate(json.loads(row[0])) if row else None
+
+    def list_evidence_packs(self, incident_id: str) -> list[EvidencePack]:
+        rows = self._run(
+            "SELECT payload FROM evidence_packs WHERE incident_id = ?"
+            " ORDER BY sealed_seq",
+            (incident_id,),
+            fetch="all",
+        )
+        return [EvidencePack.model_validate(json.loads(r[0])) for r in rows]
 
     # -- topology index ------------------------------------------------
     def load_topology(self, payload: dict, loaded_at: datetime) -> None:

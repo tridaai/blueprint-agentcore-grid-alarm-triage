@@ -125,6 +125,80 @@ class SeverityAcknowledgement(BaseModel):
     acknowledged_at: datetime
 
 
+class CauseClassification(BaseModel):
+    """One root-cause classification for one incident (Round 3).
+
+    The output of a versioned classification pack over the anchor
+    alarm's pattern — alarm kinds, devices, messages — computed in
+    code, never by the model. ``cause_class`` is one of the pack's
+    classes or ``unknown``: a pattern no rule matches stays
+    ``unknown`` with ``rule_id`` None, because a forced class is a
+    fabricated fact. Content-addressed like the severity
+    assessments: the same incident under the same pack version
+    always names the same classification, and it is never edited.
+    """
+
+    classification_id: str
+    incident_id: str
+    pack_version: str
+    cause_class: str
+    rule_id: str | None = None
+    inputs: dict = Field(default_factory=dict)
+    classified_at: datetime
+
+
+class MemoryRecord(BaseModel):
+    """One closed incident as episodic memory (Round 3).
+
+    The event-memory shape the prior-incident port stores: the
+    recorded facts of a finished incident — where it happened, what
+    class it was classified, how severe it computed, and the
+    resolution as recorded at close. Records are insert-only: a
+    record, once written, is never updated and never deleted, so a
+    brief that cites one cites facts that cannot drift.
+    """
+
+    record_id: str
+    incident_id: str
+    feeder_id: str
+    substation_id: str
+    anchor_device_id: str
+    device_ids: list[str] = Field(default_factory=list)
+    cause_class: str
+    cause_rule_id: str | None = None
+    severity_band: str
+    severity_score: int | None = None
+    member_alarm_count: int
+    customers_affected: int | None = None
+    resolution_summary: str
+    opened_at: datetime
+    closed_at: datetime
+    topology_version: str
+
+
+class EvidencePack(BaseModel):
+    """A sealed evidence pack for one incident (Round 3).
+
+    Everything the incident rests on, assembled at seal time into a
+    manifest: each member names an artefact of record and the hash
+    of its content. ``manifest_hash`` covers the member list.
+    Packs are never edited — when a member is later superseded (a
+    new severity assessment, a new brief), resealing produces the
+    next ``version`` of the pack, whose ``supersedes`` links to
+    this one. Verification recomputes every member hash from its
+    source of record plus the incident's evidence chain.
+    """
+
+    pack_id: str
+    incident_id: str
+    version: int
+    supersedes: str | None = None
+    sealed_by: str
+    sealed_at: datetime
+    members: list[dict] = Field(default_factory=list)
+    manifest_hash: str
+
+
 class Notification(BaseModel):
     """A recorded notification (Law: notify is a tool shape). In R1
     the notification is recorded against the incident; no real
