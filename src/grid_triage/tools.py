@@ -93,6 +93,16 @@ TOOL_REGISTRY: list[ToolSpec] = [
         description="Read an incident's event log: the full artefact chain in timestamp order, each line carrying its artefact id, with the verifier's verdict (Round 7).",
     ),
     ToolSpec(
+        name="get_storm_state",
+        shape=ToolShape.READ,
+        description="Read the operating state for a feeder at a moment: normal, or storm mode with the declaration act that put it there and the scope in force (Round 8). Storm mode is declared by named operator acts only — this tool reads the fold, it cannot change it.",
+    ),
+    ToolSpec(
+        name="get_storm_review",
+        shape=ToolShape.READ,
+        description="Read a storm window's post-storm review: the incidents the declaration stamped, their severity bands, closures and storm-only ETR accuracy, assembled from artefacts after stand-down (Round 8).",
+    ),
+    ToolSpec(
         name="assemble_incident_brief",
         shape=ToolShape.DRAFT,
         description="Draft the incident brief from correlated alarms, every statement cited.",

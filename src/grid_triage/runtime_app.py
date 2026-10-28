@@ -54,6 +54,14 @@ payload names one piece of triage work:
   ``close_incident`` act remains for the recorded facts; the
   gated action is the one that earns a close), work-order
   completion acts, incident splits and the event log export.
+- ``{"action": "declare_storm" | "extend_storm" |
+  "stand_down_storm" | "list_storm_declarations" |
+  "get_storm_state" | "compute_storm_review" |
+  "get_storm_review" | "verify_storm_review", ...}`` — the
+  Round 8 storm mode acts: storm mode exists only as these
+  named operator acts (declaring operates nothing — it states
+  an operating mode, recorded with its reason and scope), the
+  state fold read, and the post-storm review.
 
 The Runtime session id (``context.session_id``) maps to one
 triage session and is carried into the logs. All domain work
@@ -81,6 +89,7 @@ from grid_triage.restoration import RestorationRefusal
 from grid_triage.revisions import RevisionRefusal, TopologyRefusal, UpdateRefusal
 from grid_triage.services import DuplicateAlarm
 from grid_triage.severity import SeverityRefusal
+from grid_triage.storm import StormRefusal
 from grid_triage.wiring import Services, build_services
 from grid_triage.work_orders import WorkOrderRefusal
 
@@ -716,6 +725,112 @@ def handle_invocation(payload: dict, session_id: str | None = None) -> dict:
                 c.model_dump(mode="json")
                 for c in svc.restoration.contradictions_for(incident_id)
             ],
+        }
+    if action == "declare_storm":
+        declared_at = now
+        if payload.get("declared_at"):
+            declared_at = datetime.fromisoformat(payload["declared_at"])
+        try:
+            declaration = svc.storm.declare(
+                payload.get("declared_by", ""),
+                payload.get("role", ""),
+                payload.get("reason", ""),
+                declared_at,
+                feeders=payload.get("feeders") or [],
+                region=payload.get("region"),
+            )
+        except StormRefusal as exc:
+            return {"status": "refused", "problems": exc.problems}
+        return {"status": "declared", "declaration": declaration.model_dump(mode="json")}
+    if action == "extend_storm":
+        declared_at = now
+        if payload.get("declared_at"):
+            declared_at = datetime.fromisoformat(payload["declared_at"])
+        try:
+            act = svc.storm.extend(
+                payload.get("declaration_id", ""),
+                payload.get("declared_by", ""),
+                payload.get("role", ""),
+                payload.get("reason", ""),
+                declared_at,
+                feeders=payload.get("feeders"),
+                region=payload.get("region"),
+            )
+        except StormRefusal as exc:
+            return {
+                "status": "refused",
+                "declaration_id": payload.get("declaration_id"),
+                "problems": exc.problems,
+            }
+        return {"status": "extended", "declaration": act.model_dump(mode="json")}
+    if action == "stand_down_storm":
+        declared_at = now
+        if payload.get("declared_at"):
+            declared_at = datetime.fromisoformat(payload["declared_at"])
+        try:
+            act = svc.storm.stand_down(
+                payload.get("declaration_id", ""),
+                payload.get("declared_by", ""),
+                payload.get("role", ""),
+                payload.get("reason", ""),
+                declared_at,
+            )
+        except StormRefusal as exc:
+            return {
+                "status": "refused",
+                "declaration_id": payload.get("declaration_id"),
+                "problems": exc.problems,
+            }
+        return {"status": "stood_down", "declaration": act.model_dump(mode="json")}
+    if action == "list_storm_declarations":
+        return {
+            "status": "ok",
+            "declarations": [
+                d.model_dump(mode="json") for d in svc.storm.declarations()
+            ],
+        }
+    if action == "get_storm_state":
+        at = now
+        if payload.get("at"):
+            at = datetime.fromisoformat(payload["at"])
+        return {"status": "ok", **svc.storm.state_at(payload["feeder_id"], at)}
+    if action == "compute_storm_review":
+        computed_at = now
+        if payload.get("computed_at"):
+            computed_at = datetime.fromisoformat(payload["computed_at"])
+        try:
+            review = svc.storm.compute_review(
+                payload.get("declaration_id", ""),
+                payload.get("computed_by", ""),
+                computed_at,
+            )
+        except StormRefusal as exc:
+            return {
+                "status": "refused",
+                "declaration_id": payload.get("declaration_id"),
+                "problems": exc.problems,
+            }
+        return {"status": "computed", "review": review.model_dump(mode="json")}
+    if action == "get_storm_review":
+        review = svc.storm.get_review(payload.get("review_id", ""))
+        if review is None:
+            return {
+                "status": "no_such_review",
+                "review_id": payload.get("review_id"),
+            }
+        return {"status": "ok", "review": review.model_dump(mode="json")}
+    if action == "verify_storm_review":
+        try:
+            problems = svc.storm.verify_review(payload.get("review_id", ""))
+        except KeyError:
+            return {
+                "status": "no_such_review",
+                "review_id": payload.get("review_id"),
+            }
+        return {
+            "status": "ok",
+            "review_id": payload.get("review_id"),
+            "problems": problems,
         }
     if action == "ingest_and_brief":
         alarms = [Alarm.model_validate(a) for a in payload.get("alarms", [])]

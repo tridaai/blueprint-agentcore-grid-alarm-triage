@@ -35,6 +35,7 @@ from grid_triage.restoration import RestorationRefusal
 from grid_triage.revisions import RevisionRefusal, TopologyRefusal, UpdateRefusal
 from grid_triage.services import DuplicateAlarm
 from grid_triage.severity import SeverityRefusal
+from grid_triage.storm import StormRefusal
 from grid_triage.topology import TopologyView
 from grid_triage.wiring import Services, build_services
 from grid_triage.work_orders import WorkOrderRefusal
@@ -947,6 +948,164 @@ def get_incident_event_log(incident_id: str, format: str = "json") -> dict:
     if format == "text":
         body["text"] = s.event_log.render_text(log)
     return body
+
+
+# -- Round 8: storm mode — declarations, the state fold, reviews ---
+
+
+class StormDeclareRequest(BaseModel):
+    declared_by: str
+    role: str
+    reason: str
+    declared_at: datetime | None = None
+    feeders: list[str] = []
+    region: str | None = None
+
+
+@app.post("/storm/declare")
+def declare_storm(request: StormDeclareRequest) -> dict:
+    s = svc()
+    try:
+        declaration = s.storm.declare(
+            request.declared_by,
+            request.role,
+            request.reason,
+            request.declared_at or datetime.now(timezone.utc),
+            feeders=request.feeders,
+            region=request.region,
+        )
+    except StormRefusal as exc:
+        raise HTTPException(status_code=422, detail={"problems": exc.problems}) from exc
+    return declaration.model_dump(mode="json")
+
+
+class StormExtendRequest(BaseModel):
+    declaration_id: str
+    declared_by: str
+    role: str
+    reason: str
+    declared_at: datetime | None = None
+    feeders: list[str] | None = None
+    region: str | None = None
+
+
+@app.post("/storm/extend")
+def extend_storm(request: StormExtendRequest) -> dict:
+    s = svc()
+    try:
+        act = s.storm.extend(
+            request.declaration_id,
+            request.declared_by,
+            request.role,
+            request.reason,
+            request.declared_at or datetime.now(timezone.utc),
+            feeders=request.feeders,
+            region=request.region,
+        )
+    except StormRefusal as exc:
+        raise HTTPException(status_code=422, detail={"problems": exc.problems}) from exc
+    return act.model_dump(mode="json")
+
+
+class StormStandDownRequest(BaseModel):
+    declaration_id: str
+    declared_by: str
+    role: str
+    reason: str
+    declared_at: datetime | None = None
+
+
+@app.post("/storm/stand-down")
+def stand_down_storm(request: StormStandDownRequest) -> dict:
+    s = svc()
+    try:
+        act = s.storm.stand_down(
+            request.declaration_id,
+            request.declared_by,
+            request.role,
+            request.reason,
+            request.declared_at or datetime.now(timezone.utc),
+        )
+    except StormRefusal as exc:
+        raise HTTPException(status_code=422, detail={"problems": exc.problems}) from exc
+    return act.model_dump(mode="json")
+
+
+@app.get("/storm/declarations")
+def list_storm_declarations() -> dict:
+    return {
+        "declarations": [
+            d.model_dump(mode="json") for d in svc().storm.declarations()
+        ]
+    }
+
+
+@app.get("/storm/state")
+def get_storm_state(feeder_id: str, at: str | None = None) -> dict:
+    moment = datetime.now(timezone.utc)
+    if at:
+        try:
+            moment = datetime.fromisoformat(at)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422, detail=f"not an ISO timestamp: {at!r}"
+            ) from exc
+    return svc().storm.state_at(feeder_id, moment)
+
+
+class StormReviewRequest(BaseModel):
+    declaration_id: str
+    computed_by: str
+    computed_at: datetime | None = None
+
+
+@app.post("/storm/reviews")
+def compute_storm_review(request: StormReviewRequest) -> dict:
+    s = svc()
+    try:
+        review = s.storm.compute_review(
+            request.declaration_id,
+            request.computed_by,
+            request.computed_at or datetime.now(timezone.utc),
+        )
+    except StormRefusal as exc:
+        raise HTTPException(status_code=422, detail={"problems": exc.problems}) from exc
+    return review.model_dump(mode="json")
+
+
+@app.get("/storm/declarations/{declaration_id}/review")
+def get_storm_review_for_declaration(declaration_id: str) -> dict:
+    s = svc()
+    if s.storm.get_declaration(declaration_id) is None:
+        raise HTTPException(
+            status_code=404, detail=f"no such storm declaration: {declaration_id}"
+        )
+    review = s.storm.review_for(declaration_id)
+    return {
+        "declaration_id": declaration_id,
+        "review": review.model_dump(mode="json") if review else None,
+        "reviews": [
+            r.model_dump(mode="json") for r in s.storm.reviews(declaration_id)
+        ],
+    }
+
+
+@app.get("/storm/reviews/{review_id}")
+def get_storm_review(review_id: str) -> dict:
+    review = svc().storm.get_review(review_id)
+    if review is None:
+        raise HTTPException(status_code=404, detail=f"no such storm review: {review_id}")
+    return review.model_dump(mode="json")
+
+
+@app.get("/storm/reviews/{review_id}/verify")
+def verify_storm_review(review_id: str) -> dict:
+    s = svc()
+    try:
+        problems = s.storm.verify_review(review_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"review_id": review_id, "problems": problems}
 
 
 @app.get("/topology/versions")

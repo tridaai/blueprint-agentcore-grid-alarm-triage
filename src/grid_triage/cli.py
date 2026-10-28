@@ -16,6 +16,7 @@ from grid_triage.packs import PackRefusal
 from grid_triage.restoration import RestorationRefusal
 from grid_triage.revisions import RevisionRefusal, TopologyRefusal, UpdateRefusal
 from grid_triage.severity import SeverityRefusal
+from grid_triage.storm import StormRefusal
 from grid_triage.wiring import build_services
 from grid_triage.work_orders import WorkOrderRefusal
 
@@ -166,6 +167,37 @@ def main(argv: list[str] | None = None) -> int:
     p_log = sub.add_parser("event-log")
     p_log.add_argument("incident_id")
     p_log.add_argument("--format", default="json", choices=["json", "text"])
+    p_sdec = sub.add_parser("storm-declare")
+    p_sdec.add_argument("--by", required=True, help="the declaring operator's name")
+    p_sdec.add_argument("--role", required=True, help="the declaring operator's role")
+    p_sdec.add_argument("--reason", required=True, help="the stated reason for the declaration")
+    p_sdec.add_argument("--feeder", action="append", default=None, help="a feeder in scope (repeatable; none = the whole territory)")
+    p_sdec.add_argument("--region", default=None, help="a region label for the scope")
+    p_sdec.add_argument("--declared-at", default=None, help="ISO timestamp; default: now")
+    p_sext = sub.add_parser("storm-extend")
+    p_sext.add_argument("declaration_id")
+    p_sext.add_argument("--by", required=True, help="the extending operator's name")
+    p_sext.add_argument("--role", required=True, help="the extending operator's role")
+    p_sext.add_argument("--reason", required=True, help="the stated reason for the extension")
+    p_sext.add_argument("--feeder", action="append", default=None, help="the scope's feeders, restated in full (repeatable)")
+    p_sext.add_argument("--region", default=None)
+    p_sext.add_argument("--declared-at", default=None, help="ISO timestamp; default: now")
+    p_sdown = sub.add_parser("storm-stand-down")
+    p_sdown.add_argument("declaration_id")
+    p_sdown.add_argument("--by", required=True, help="the standing-down operator's name")
+    p_sdown.add_argument("--role", required=True, help="the standing-down operator's role")
+    p_sdown.add_argument("--reason", required=True, help="the stated reason for standing down")
+    p_sdown.add_argument("--declared-at", default=None, help="ISO timestamp; default: now")
+    p_slist = sub.add_parser("storm-declarations")
+    p_sstate = sub.add_parser("storm-state")
+    p_sstate.add_argument("feeder_id")
+    p_sstate.add_argument("--at", default=None, help="ISO timestamp; default: now")
+    p_srev = sub.add_parser("storm-review")
+    p_srev.add_argument("declaration_id")
+    p_srev.add_argument("--by", required=True, help="who computes the review")
+    p_srev.add_argument("--at", default=None, help="ISO timestamp; default: now")
+    p_srevv = sub.add_parser("storm-review-verify")
+    p_srevv.add_argument("review_id")
     args = parser.parse_args(argv)
 
     svc = build_services()
@@ -687,6 +719,100 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(body, indent=2))
             if problems:
                 return 1
+    elif args.command == "storm-declare":
+        declared_at = (
+            datetime.fromisoformat(args.declared_at)
+            if args.declared_at
+            else datetime.now(timezone.utc)
+        )
+        try:
+            declaration = svc.storm.declare(
+                args.by,
+                args.role,
+                args.reason,
+                declared_at,
+                feeders=args.feeder or [],
+                region=args.region,
+            )
+        except StormRefusal as exc:
+            print("refused: " + "; ".join(exc.problems))
+            return 1
+        print(json.dumps(declaration.model_dump(mode="json"), indent=2))
+    elif args.command == "storm-extend":
+        declared_at = (
+            datetime.fromisoformat(args.declared_at)
+            if args.declared_at
+            else datetime.now(timezone.utc)
+        )
+        try:
+            act = svc.storm.extend(
+                args.declaration_id,
+                args.by,
+                args.role,
+                args.reason,
+                declared_at,
+                feeders=args.feeder,
+                region=args.region,
+            )
+        except StormRefusal as exc:
+            print("refused: " + "; ".join(exc.problems))
+            return 1
+        print(json.dumps(act.model_dump(mode="json"), indent=2))
+    elif args.command == "storm-stand-down":
+        declared_at = (
+            datetime.fromisoformat(args.declared_at)
+            if args.declared_at
+            else datetime.now(timezone.utc)
+        )
+        try:
+            act = svc.storm.stand_down(
+                args.declaration_id,
+                args.by,
+                args.role,
+                args.reason,
+                declared_at,
+            )
+        except StormRefusal as exc:
+            print("refused: " + "; ".join(exc.problems))
+            return 1
+        print(json.dumps(act.model_dump(mode="json"), indent=2))
+    elif args.command == "storm-declarations":
+        print(json.dumps(
+            [d.model_dump(mode="json") for d in svc.storm.declarations()],
+            indent=2,
+        ))
+    elif args.command == "storm-state":
+        at = (
+            datetime.fromisoformat(args.at)
+            if args.at
+            else datetime.now(timezone.utc)
+        )
+        print(json.dumps(svc.storm.state_at(args.feeder_id, at), indent=2))
+    elif args.command == "storm-review":
+        computed_at = (
+            datetime.fromisoformat(args.at)
+            if args.at
+            else datetime.now(timezone.utc)
+        )
+        try:
+            review = svc.storm.compute_review(
+                args.declaration_id, args.by, computed_at
+            )
+        except StormRefusal as exc:
+            print("refused: " + "; ".join(exc.problems))
+            return 1
+        print(json.dumps(review.model_dump(mode="json"), indent=2))
+    elif args.command == "storm-review-verify":
+        try:
+            problems = svc.storm.verify_review(args.review_id)
+        except KeyError:
+            print(f"no such storm review: {args.review_id}")
+            return 1
+        print(json.dumps(
+            {"review_id": args.review_id, "problems": problems}, indent=2
+        ))
+        if problems:
+            return 1
     return 0
 
 
