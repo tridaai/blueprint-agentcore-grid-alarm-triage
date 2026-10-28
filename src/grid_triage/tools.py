@@ -83,6 +83,16 @@ TOOL_REGISTRY: list[ToolSpec] = [
         description="Read an incident's revision chain: the re-correlation records linking it to its revisions under newer topology versions, with their diffs (Round 6).",
     ),
     ToolSpec(
+        name="get_restoration_confirmation",
+        shape=ToolShape.READ,
+        description="Read an incident's restoration confirmation: the evidence classes present or absent, restored vs outstanding devices and customers, computed from the recorded signals (Round 7).",
+    ),
+    ToolSpec(
+        name="get_incident_event_log",
+        shape=ToolShape.READ,
+        description="Read an incident's event log: the full artefact chain in timestamp order, each line carrying its artefact id, with the verifier's verdict (Round 7).",
+    ),
+    ToolSpec(
         name="assemble_incident_brief",
         shape=ToolShape.DRAFT,
         description="Draft the incident brief from correlated alarms, every statement cited.",

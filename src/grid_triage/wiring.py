@@ -18,6 +18,7 @@ from grid_triage.evidence import EvidenceChain
 from grid_triage.memory import LocalMemoryDouble, MemoryService
 from grid_triage.object_store import LocalObjectStore
 from grid_triage.packs import EvidencePackService
+from grid_triage.restoration import EventLogService, RestorationService
 from grid_triage.revisions import FieldUpdateService, RevisionService, TopologyService
 from grid_triage.roster import RosterView, load_roster_file
 from grid_triage.seed import ReferenceFeedAdapter
@@ -77,6 +78,22 @@ class Services:
             self.etr,
             self.topology_acts,
         )
+        # Round 7: restoration signals and confirmations, the
+        # gated close, splits, post-close contradictions and the
+        # incident event log. The update service's post-close
+        # handler is registered here — the restoration service is
+        # built after it, so the hook is set on the instance.
+        self.restoration = RestorationService(
+            self.store,
+            self.chain,
+            self.closure,
+            self.work_orders,
+            self.severity,
+            cause=self.cause,
+            etr=self.etr,
+        )
+        self.updates.post_close_handler = self.restoration.handle_post_close_alarm
+        self.event_log = EventLogService(self.store, self.chain)
         self.assembler = IncidentAssembler(
             self.store,
             self.chain,

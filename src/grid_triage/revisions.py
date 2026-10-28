@@ -114,9 +114,59 @@ class FieldUpdateService:
         self.store = store
         self.chain = chain
         self.pack = pack
+        # Round 7: the restoration service registers its post-close
+        # handler here (wiring sets it after construction — the
+        # restoration service itself depends on the closure service,
+        # so the handler cannot be a constructor argument without a
+        # cycle). Signature: (incident, alarm, recorded_at) -> the
+        # correlation dict recorded on the update.
+        self.post_close_handler = None
 
     def list_updates(self, incident_id: str) -> list[FieldUpdate]:
         return self.store.list_field_updates(incident_id)
+
+    def _closed_outcome(
+        self, incident: Incident, alarm: Alarm, reported_at: datetime
+    ) -> tuple[dict, str | None] | None:
+        """Round 7: an alarm update against a CLOSED incident never
+        joins it and never reopens it. On a device of the closed
+        incident's member set it contradicts the recorded
+        restoration — the restoration service's handler records
+        the contradiction and opens a fresh incident. On any other
+        device the update is recorded as evidence with a named
+        non-join. Returns None when the incident is not closed."""
+        closure = self.store.get_incident_closure(incident.incident_id)
+        if closure is None:
+            return None
+        member_devices = {
+            alarm_.device_id
+            for alarm_ in (
+                self.store.get_alarm(m.alarm_id)
+                for m in self.store.list_memberships(incident.incident_id)
+            )
+            if alarm_ is not None
+        }
+        if alarm.device_id in member_devices:
+            if self.post_close_handler is not None:
+                return self.post_close_handler(incident, alarm, reported_at), None
+            return {
+                "status": "post_close_contradiction",
+                "topology_version": incident.topology_version,
+                "reason": (
+                    f"incident {incident.incident_id} is closed (closure "
+                    f"{closure.closure_id}) — the alarm contradicts the "
+                    "recorded restoration and does not reopen it"
+                ),
+            }, None
+        return {
+            "status": "no_join",
+            "topology_version": incident.topology_version,
+            "reason": (
+                f"incident {incident.incident_id} is closed (closure "
+                f"{closure.closure_id}) — updates against it are recorded "
+                "as evidence only and never join it"
+            ),
+        }, None
 
     def _correlation_outcome(
         self, incident: Incident, alarm: Alarm
@@ -242,7 +292,11 @@ class FieldUpdateService:
         rule_id: str | None = None
         if alarm is not None:
             self.store.add_alarm(alarm)
-            correlation, rule_id = self._correlation_outcome(incident, alarm)
+            closed = self._closed_outcome(incident, alarm, reported_at)
+            if closed is not None:
+                correlation, rule_id = closed
+            else:
+                correlation, rule_id = self._correlation_outcome(incident, alarm)
             if correlation["status"] == "joined":
                 from grid_triage.models import IncidentMembership
 
