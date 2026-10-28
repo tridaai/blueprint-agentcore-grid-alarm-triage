@@ -49,6 +49,18 @@ class ClosureRefusal(RuntimeError):
         super().__init__("; ".join(problems))
 
 
+CLOSURE_PACK = {
+    "version": "2026.10.1",
+    # The roles that may record a closure — the control-room
+    # vocabulary every other act pack in the system uses
+    # (work orders, restoration, storm, handover). Round 10's
+    # red team found this act took any non-empty string here:
+    # a closure recorded as "banana" or "system" stood, and
+    # with it the accuracy outcome the ledger derives.
+    "actor_roles": ["operator", "duty_manager"],
+}
+
+
 def _minutes(delta) -> float:
     return round(delta.total_seconds() / 60.0, 3)
 
@@ -83,8 +95,11 @@ class ClosureService:
         problems: list[str] = []
         if not closed_by or not closed_by.strip():
             problems.append("a closure names its operator")
-        if not role or not role.strip():
-            problems.append("a closure names the operator's role")
+        if role not in CLOSURE_PACK["actor_roles"]:
+            problems.append(
+                f"role {role!r} may not record a closure (allowed: "
+                f"{', '.join(CLOSURE_PACK['actor_roles'])})"
+            )
         if not resolution_summary or not resolution_summary.strip():
             problems.append("a closure records the resolution facts")
         if self.store.get_incident_closure(incident_id) is not None:
@@ -93,6 +108,12 @@ class ClosureService:
             problems.append(
                 "restored_at precedes the incident's first alarm — "
                 "a restoration cannot predate the outage"
+            )
+        if restored_at > recorded_at:
+            problems.append(
+                "restored_at postdates the closure's own recording — "
+                "a restoration is recorded after it happens, never "
+                "dated into the future the ledger would grade as fact"
             )
         if problems:
             raise ClosureRefusal(problems)
