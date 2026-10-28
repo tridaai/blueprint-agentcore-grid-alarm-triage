@@ -1,7 +1,7 @@
-"""Eval gate — Rounds 1–2 (grid alarm triage agent).
+"""Eval gate — Rounds 1–3 (grid alarm triage agent).
 
 Runs the planted streams through the real service graph on a
-throwaway SQLite store and grades the R1 and R2 guarantees. Every
+throwaway SQLite store and grades the R1–R3 guarantees. Every
 counter is zero-tolerance unless marked otherwise:
 
   flood_incident_count_error     the 40-alarm flood must produce
@@ -35,6 +35,35 @@ counter is zero-tolerance unless marked otherwise:
   acknowledgement_flow_errors    the SEV-1 requirement appears in the
                                  queue, a wrong-role ack is refused, a
                                  named operator's ack clears it
+  classification_errors          the flood must classify
+                                 vegetation_contact under its rule;
+                                 wrong class or rule counts
+  forced_classifications         an anchor pattern matching no rule
+                                 (the lone trip) must stay unknown —
+                                 a forced class counts
+  priors_order_errors            the flood's priors must be exactly
+                                 [INC-HIST-0042 (10), INC-HIST-0057
+                                 (7)] — the class-weighted order
+  priors_included_irrelevant     the Feeder 12 record must never
+                                 surface as a flood prior
+  brief_priors_missing           the flood's brief must quote both
+                                 priors, cited to their records
+  brief_prior_misattributions_accepted
+                                 a brief attributing a class to a
+                                 prior that its record does not state
+                                 must be refused, never stored
+  memory_facts_altered           stored memory records differing
+                                 from the planted facts, or a forged
+                                 re-insert accepted
+  pack_members_missing           the sealed flood pack must carry
+                                 all 40 alarm members plus the
+                                 correlation, severity, topology,
+                                 brief and priors members
+  pack_verify_failures           an untampered sealed pack must
+                                 verify with zero problems
+  pack_member_tamper_undetected  tampering with a stored pack
+                                 member, or with a member alarm's
+                                 payload, must be caught by verify
 
 Run: uv run python evals/run_evals.py  (exit 0 = GATE: PASS)
 """
@@ -42,6 +71,8 @@ Run: uv run python evals/run_evals.py  (exit 0 = GATE: PASS)
 from __future__ import annotations
 
 import copy
+import json
+import sqlite3
 import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -49,13 +80,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from grid_triage.agent import BandMismatchRefusal, IncidentAssembler  # noqa: E402
+from grid_triage.agent import (  # noqa: E402
+    BandMismatchRefusal,
+    IncidentAssembler,
+    PriorAttributionRefusal,
+)
 from grid_triage.config import Settings  # noqa: E402
 from grid_triage.models import BriefStatement, Citation, ToolShape  # noqa: E402
 from grid_triage.seed import (  # noqa: E402
     FLOOD_ALARM_IDS,
     NUISANCE_ALARM_IDS,
     T0,
+    history_records,
     lone_alarms,
 )
 from grid_triage.severity import (  # noqa: E402
@@ -63,6 +99,7 @@ from grid_triage.severity import (  # noqa: E402
     band_for_score,
     compute_assessment,
 )
+from grid_triage.store import MemoryImmutableError  # noqa: E402
 from grid_triage.tools import TOOL_REGISTRY  # noqa: E402
 from grid_triage.topology import TopologyView  # noqa: E402
 from grid_triage.wiring import Services  # noqa: E402
@@ -83,6 +120,9 @@ def main() -> int:
     created = svc.correlator.correlate_new(svc.topology)
     incidents = svc.store.list_incidents()
     stored = svc.store.list_alarms()
+    # Round 3: the planted history is in memory before any brief is
+    # assembled, so the brief flow exercises priors end to end.
+    svc.memory.load_history()
 
     counters: dict[str, int] = {}
 
@@ -217,7 +257,128 @@ def main() -> int:
         ack_errors += 1
     counters["acknowledgement_flow_errors"] = ack_errors
 
-    print("Evals — grid alarm triage agent (Rounds 1-2)")
+    # ---- Round 3: classification, memory, priors, evidence packs ----
+    flood_class = svc.cause.classify(flood_incident.incident_id, now)
+    lone_class = svc.cause.classify(lone_incident.incident_id, now)
+    counters["classification_errors"] = (
+        0
+        if (
+            flood_class.cause_class == "vegetation_contact"
+            and flood_class.rule_id == "lockout_with_downstream_fault"
+        )
+        else 1
+    )
+    counters["forced_classifications"] = (
+        0 if (lone_class.cause_class == "unknown" and lone_class.rule_id is None) else 1
+    )
+
+    hits = svc.memory.retrieve_for_incident(flood_incident.incident_id, now)
+    got_order = [(h.record.incident_id, h.score) for h in hits]
+    counters["priors_order_errors"] = (
+        0 if got_order == [("INC-HIST-0042", 10), ("INC-HIST-0057", 7)] else 1
+    )
+    counters["priors_included_irrelevant"] = sum(
+        1 for h in hits if h.record.feeder_id != "FDR-07"
+    )
+
+    flood_brief = svc.store.list_briefs(flood_incident.incident_id)[-1]
+    prior_statements = [
+        s for s in flood_brief.statements if s.text.startswith("Prior incident")
+    ]
+    counters["brief_priors_missing"] = abs(len(prior_statements) - 2)
+
+    hist42 = next(
+        r for r in svc.memory_port.list_records() if r.incident_id == "INC-HIST-0042"
+    )
+
+    class _Misattributor:
+        profile = "offline"
+
+        def propose_brief(self, facts):
+            return [
+                BriefStatement(
+                    text="A prior incident on this feeder was caused by lightning.",
+                    citations=[
+                        Citation(evidence_item_id=hist42.record_id, field="cause_class")
+                    ],
+                )
+            ]
+
+    briefs_before = len(svc.store.list_briefs(flood_incident.incident_id))
+    try:
+        IncidentAssembler(
+            svc.store, svc.chain, _Misattributor(), cause=svc.cause, memory=svc.memory
+        ).assemble(flood_incident.incident_id, now)
+        counters["brief_prior_misattributions_accepted"] = 1
+    except PriorAttributionRefusal:
+        counters["brief_prior_misattributions_accepted"] = (
+            0
+            if len(svc.store.list_briefs(flood_incident.incident_id)) == briefs_before
+            else 1
+        )
+
+    altered = 0
+    for record in history_records():
+        if svc.store.get_memory_record(record.record_id) != record:
+            altered += 1
+    try:
+        svc.memory_port.put_record(
+            hist42.model_copy(update={"resolution_summary": "A rewritten past."})
+        )
+        altered += 1  # a forged re-insert was accepted
+    except MemoryImmutableError:
+        pass
+    counters["memory_facts_altered"] = altered
+
+    pack = svc.packs.seal(flood_incident.incident_id, "op.dana", T0 + timedelta(minutes=35))
+    member_types = [m["type"] for m in pack.members]
+    counters["pack_members_missing"] = (
+        abs(member_types.count("alarm") - 40)
+        + sum(
+            1
+            for t in (
+                "correlation_decisions",
+                "severity_assessment",
+                "topology_slice",
+                "brief",
+                "priors",
+            )
+            if member_types.count(t) != 1
+        )
+    )
+    counters["pack_verify_failures"] = len(svc.packs.verify_pack(pack.pack_id))
+
+    # Tamper probes run last: each must be caught by recomputation.
+    undetected = 0
+    db = sqlite3.connect(tmp / "grid.db")
+    payload = json.loads(
+        db.execute(
+            "SELECT payload FROM evidence_packs WHERE pack_id = ?", (pack.pack_id,)
+        ).fetchone()[0]
+    )
+    sev_member = next(
+        m for m in payload["members"] if m["type"] == "severity_assessment"
+    )
+    sev_member["content_hash"] = "0" * 64
+    db.execute(
+        "UPDATE evidence_packs SET payload = ? WHERE pack_id = ?",
+        (json.dumps(payload), pack.pack_id),
+    )
+    db.commit()
+    db.close()
+    if not svc.packs.verify_pack(pack.pack_id):
+        undetected += 1
+
+    lone_pack = svc.packs.seal(
+        lone_incident.incident_id, "op.dana", T0 + timedelta(hours=8)
+    )
+    lone_item = svc.store.list_evidence(lone_incident.incident_id)[0]
+    (svc.objects.root / lone_item.object_key).write_bytes(b'{"alarm_id": "forged"}')
+    if not svc.packs.verify_pack(lone_pack.pack_id):
+        undetected += 1
+    counters["pack_member_tamper_undetected"] = undetected
+
+    print("Evals — grid alarm triage agent (Rounds 1-3)")
     for name, value in counters.items():
         print(f"  {name}: {value} (required 0)")
     failed = [n for n, v in counters.items() if v != 0]
