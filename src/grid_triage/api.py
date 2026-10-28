@@ -717,7 +717,7 @@ def recorrelate_incident(incident_id: str, request: RecorrelateRequest) -> dict:
 def list_incident_revisions(incident_id: str) -> dict:
     s = svc()
     try:
-        chain = s.revisions.chain(incident_id)
+        chain = s.revisions.revision_chain(incident_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {

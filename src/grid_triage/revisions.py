@@ -151,7 +151,9 @@ class FieldUpdateService:
             for m in self.store.list_memberships(incident.incident_id)
         ]
         candidates = [a for a in members if a is not None] + [alarm]
-        result = correlate(candidates, view)
+        result = correlate(
+            candidates, view, incident_id_for=lambda a: f"INC-{a.alarm_id}"
+        )
         for group in result.incidents:
             if group.anchor_alarm_id != incident.anchor_alarm_id:
                 continue
@@ -389,7 +391,7 @@ class RevisionService:
                     changed = True
         return ids
 
-    def chain(self, incident_id: str) -> list[IncidentRevision]:
+    def revision_chain(self, incident_id: str) -> list[IncidentRevision]:
         """Every revision touching this incident's lineage, oldest
         first — the revision chain read."""
         if self.store.get_incident(incident_id) is None:

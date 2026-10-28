@@ -484,7 +484,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(revision.model_dump(mode="json"), indent=2))
     elif args.command == "revisions":
         try:
-            chain = svc.revisions.chain(args.incident_id)
+            chain = svc.revisions.revision_chain(args.incident_id)
         except KeyError:
             print(f"no such incident: {args.incident_id}")
             return 1

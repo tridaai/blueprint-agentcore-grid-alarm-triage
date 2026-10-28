@@ -542,7 +542,7 @@ def handle_invocation(payload: dict, session_id: str | None = None) -> dict:
     if action == "get_incident_revisions":
         incident_id = payload["incident_id"]
         try:
-            chain = svc.revisions.chain(incident_id)
+            chain = svc.revisions.revision_chain(incident_id)
         except KeyError:
             return {"status": "no_such_incident", "incident_id": incident_id}
         return {
