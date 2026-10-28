@@ -26,11 +26,15 @@ Model profiles:
 from __future__ import annotations
 
 import os
+import re
 from datetime import datetime
 from typing import Any, Protocol
 
 from grid_triage.evidence import EvidenceChain
 from grid_triage.models import BriefStatement, Citation, IncidentBrief
+from grid_triage.severity import SeverityService
+
+_BAND_TOKEN = re.compile(r"\bSEV-[1-4]\b|\bUNRATED\b")
 
 
 class ModelNotConfigured(RuntimeError):
@@ -44,6 +48,30 @@ class CitationRefusal(RuntimeError):
     def __init__(self, problems: list[str]):
         self.problems = problems
         super().__init__("unresolvable citations: " + "; ".join(problems))
+
+
+class BandMismatchRefusal(RuntimeError):
+    """Raised when a proposed brief states a severity band other
+    than the computed assessment's (Law 3: the model may summarise
+    the band, never re-band)."""
+
+    def __init__(self, problems: list[str]):
+        self.problems = problems
+        super().__init__("band mismatch: " + "; ".join(problems))
+
+
+def band_problems(statements: list[BriefStatement], assessed_band: str) -> list[str]:
+    """Every band token mentioned anywhere in the brief must be
+    the assessed band."""
+    problems: list[str] = []
+    for stmt in statements:
+        for token in _BAND_TOKEN.findall(stmt.text):
+            if token != assessed_band:
+                problems.append(
+                    f"brief states {token} but the assessment is {assessed_band}:"
+                    f" {stmt.text[:40]!r}"
+                )
+    return problems
 
 
 class ModelPort(Protocol):
@@ -142,6 +170,45 @@ class OfflineComposer:
                     citations=[Citation(evidence_item_id=first["item_id"], field="device_id")],
                 )
             )
+        severity = next((f for f in facts if f["field"] == "_severity"), None)
+        if severity is not None:
+            item_id = severity["item_id"]
+            if severity["band"] == "UNRATED":
+                statements.append(
+                    BriefStatement(
+                        text=(
+                            "Severity UNRATED — the data cannot supply: "
+                            + ", ".join(severity["missing_inputs"])
+                            + "."
+                        ),
+                        citations=[
+                            Citation(evidence_item_id=item_id, field="band"),
+                            Citation(evidence_item_id=item_id, field="missing_inputs"),
+                        ],
+                    )
+                )
+            else:
+                loads = severity["critical_load_names"]
+                loads_text = ", ".join(loads) if loads else "none"
+                statements.append(
+                    BriefStatement(
+                        text=(
+                            f"Severity {severity['band']} (score {severity['score']}): "
+                            f"{severity['customers_affected']} customers affected, "
+                            f"{severity['member_alarm_count']} alarms, "
+                            f"{severity['duration_minutes']:g} minutes elapsed; "
+                            f"critical loads affected: {loads_text}."
+                        ),
+                        citations=[
+                            Citation(evidence_item_id=item_id, field="band"),
+                            Citation(evidence_item_id=item_id, field="score"),
+                            Citation(
+                                evidence_item_id=item_id,
+                                field="inputs.customers_affected",
+                            ),
+                        ],
+                    )
+                )
         return statements
 
 
@@ -179,15 +246,19 @@ def model_for_profile(profile: str) -> ModelPort:
 
 class IncidentAssembler:
     """The agent step: member alarms → facts → model proposal →
-    citation check → stored brief. Its tools are the reads below
-    (the registry's read/draft shapes); its only write is the
-    verified brief."""
+    citation check → band check → stored brief. Its tools are the
+    reads below (the registry's read/draft shapes); its only write
+    is the verified brief. Severity is computed by the severity
+    engine (Law 3) before the model is consulted, recorded on the
+    incident's evidence chain, and handed to the model as facts —
+    the brief may restate the assessed band and no other."""
 
     def __init__(self, store, chain: EvidenceChain, model: ModelPort):
         self.store = store
         self.chain = chain
         self.model = model
         self.resolver = CitationResolver(chain)
+        self.severity = SeverityService(store, chain)
 
     # -- tools (plain functions, Strands shape) ----------------------
     def read_incident_facts(self, incident_id: str) -> list[dict[str, Any]]:
@@ -217,16 +288,56 @@ class IncidentAssembler:
                 )
         return facts
 
+    def read_severity_facts(self, assessment) -> list[dict[str, Any]]:
+        """The current assessment as model facts, citing its own
+        evidence item on the incident's chain."""
+        item_id = f"EV-{assessment.assessment_id}"
+        inputs = assessment.inputs
+        facts: list[dict[str, Any]] = [
+            {
+                "item_id": item_id,
+                "field": "_severity",
+                "band": assessment.band,
+                "score": assessment.score,
+                "customers_affected": inputs.get("customers_affected"),
+                "critical_load_names": [
+                    c["name"] for c in inputs.get("critical_loads", [])
+                ],
+                "duration_minutes": inputs.get("duration_minutes"),
+                "member_alarm_count": inputs.get("member_alarm_count"),
+                "missing_inputs": assessment.missing_inputs,
+            },
+            {"item_id": item_id, "field": "band", "value": assessment.band},
+        ]
+        if assessment.score is not None:
+            facts.append(
+                {"item_id": item_id, "field": "score", "value": assessment.score}
+            )
+        if inputs.get("customers_affected") is not None:
+            facts.append(
+                {
+                    "item_id": item_id,
+                    "field": "inputs.customers_affected",
+                    "value": inputs["customers_affected"],
+                }
+            )
+        return facts
+
     # -- the step ------------------------------------------------------
     def assemble(self, incident_id: str, now: datetime) -> IncidentBrief:
         incident = self.store.get_incident(incident_id)
         if incident is None:
             raise KeyError(f"no such incident: {incident_id}")
+        assessment = self.severity.assess(incident_id, now)
         facts = self.read_incident_facts(incident_id)
+        facts += self.read_severity_facts(assessment)
         statements = self.model.propose_brief(facts)
         problems = self.resolver.problems(incident_id, statements)
         if problems:
             raise CitationRefusal(problems)
+        mismatches = band_problems(statements, assessment.band)
+        if mismatches:
+            raise BandMismatchRefusal(mismatches)
         brief = IncidentBrief(
             brief_id=f"BRIEF-{incident_id}-{len(self.store.list_briefs(incident_id)) + 1:03d}",
             incident_id=incident_id,
