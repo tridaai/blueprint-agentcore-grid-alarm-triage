@@ -24,6 +24,7 @@ from grid_triage.roster import RosterView, load_roster_file
 from grid_triage.seed import ReferenceFeedAdapter
 from grid_triage.services import CorrelationService, IngestService
 from grid_triage.severity import SeverityService
+from grid_triage.storm import StormService
 from grid_triage.store import SqlStore
 from grid_triage.topology import TopologyView, load_topology_file
 from grid_triage.work_orders import WorkOrderService
@@ -44,6 +45,10 @@ class Services:
         self.store.load_topology(payload, datetime.now(timezone.utc))
         self.topology = TopologyView(payload)
         self.chain = EvidenceChain(self.store, self.objects)
+        # Round 8: the storm declaration acts and the state fold.
+        # The service rests on the store alone, so it is built
+        # before the consumers that read the fold.
+        self.storm = StormService(self.store)
         self.intake = IngestService(self.store)
         self.correlator = CorrelationService(self.store, self.chain)
         self.feed = ReferenceFeedAdapter()

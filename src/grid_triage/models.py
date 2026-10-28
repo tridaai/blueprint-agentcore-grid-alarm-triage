@@ -633,8 +633,9 @@ class StormDeclaration(BaseModel):
     stated reason and affected scope (``feeders``; empty means
     the whole territory, ``region`` a free label the operator
     states), and links to the window it belongs to
-    (``opens_declaration_id`` — the declare act's own id on the
-    declare itself) and to the act it follows (``supersedes``).
+    (``opens_declaration_id`` names the declare act; it is None
+    on the declare itself) and to the act it follows
+    (``supersedes``).
     The acts are insert-only and content-addressed: the state at
     any moment is the fold of these acts, and no act is ever
     edited or deleted. Alarm volume alone never creates one —
