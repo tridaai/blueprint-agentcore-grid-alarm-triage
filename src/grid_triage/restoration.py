@@ -423,11 +423,17 @@ class RestorationService:
             "computed_at": computed_at.isoformat(),
             "supersedes": prior.confirmation_id if prior else None,
         }
+        candidate = RestorationConfirmation(
+            confirmation_id="CONF-pending", **body
+        )
+        link_free = {"confirmation_id", "supersedes"}
+        if prior is not None and prior.model_dump(
+            mode="json", exclude=link_free
+        ) == candidate.model_dump(mode="json", exclude=link_free):
+            return prior  # identical recomputation: a no-op
         confirmation = RestorationConfirmation(
             confirmation_id=_hash_id("CONF", body), **body
         )
-        if prior is not None and prior.confirmation_id == confirmation.confirmation_id:
-            return prior  # identical recomputation: a no-op
         self.store.add_restoration_confirmation(confirmation)
         self.chain.append(
             incident_id,

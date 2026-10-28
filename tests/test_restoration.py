@@ -253,7 +253,11 @@ def test_close_refused_on_partial_confirmation(fed):
         )
     problems = "; ".join(exc.value.problems)
     assert "partial" in problems
-    assert "crew_confirmation" in problems
+    # The crew note is on record (the crew class is present);
+    # what is missing is the meter evidence for seven devices
+    # and the feeder supply reading — and the refusal names both.
+    assert "meter_restoration" in problems
+    assert "feeder_supply_reading" in problems
     assert "still out" in problems
     assert fed.store.get_incident_closure(FLOOD) is None
 
