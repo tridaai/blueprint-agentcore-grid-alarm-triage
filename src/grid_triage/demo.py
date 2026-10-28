@@ -3,8 +3,10 @@
 Flood in → one incident out. Nuisance stream → no incident, every
 alarm still visible. Lone trip → its own incident. Then the agent
 assembles the flood incident's brief, every statement cited —
-including the prior incidents retrieved from memory — and the
-evidence pack is sealed and verified.
+including the prior incidents retrieved from memory — the
+evidence pack is sealed and verified, the ETR is computed with
+its basis on the record, and the flood is closed so the accuracy
+ledger gains its first entry.
 """
 
 from __future__ import annotations
@@ -73,6 +75,15 @@ def run_demo(settings: Settings | None = None) -> Services:
         f"Root-cause classification: {classification.cause_class} "
         f"(rule: {classification.rule_id}, pack {classification.pack_version})."
     )
+    estimate = svc.etr.estimate(flood.incident_id, T0 + timedelta(minutes=30))
+    components = {c["name"]: c["minutes"] for c in estimate.components}
+    print(
+        f"ETR at T+30min (rate pack {estimate.rate_pack_version}, roster "
+        f"{estimate.roster_version}): restoration {estimate.estimated_restored_at} "
+        f"(basis: {estimate.basis}) — crew wait {components['crew_wait']} min "
+        f"({estimate.inputs['crew_id']}), travel {components['travel_access']} min, "
+        f"repair {components['base_repair']} min."
+    )
     hits = svc.memory.retrieve_for_incident(flood.incident_id, now)
     for hit in hits:
         print(
@@ -97,6 +108,27 @@ def run_demo(settings: Settings | None = None) -> Services:
         f"verify problems: {problems}."
     )
     print(f"Evidence chain valid: {svc.chain.verify_chain(flood.incident_id)}")
+
+    restored_at = T0 + timedelta(hours=4, minutes=30)  # 06:43 UTC
+    closure, outcome, _record = svc.closure.close_incident(
+        flood.incident_id,
+        "op.dana",
+        "operator",
+        restored_at,
+        "Vegetation crew cleared the tree contact at REC-071; "
+        "Feeder 7 restored after inspection.",
+        now,
+    )
+    print(
+        f"\nClosure {closure.closure_id} recorded by {closure.closed_by}: "
+        f"restored {restored_at} — actual duration "
+        f"{outcome.actual_duration_minutes} min against the estimated "
+        f"{outcome.estimated_duration_minutes} min (signed error "
+        f"{outcome.signed_error_minutes:+} min)."
+    )
+    ledger = svc.closure.accuracy_ledger()
+    print(f"ETR accuracy ledger: {ledger['by_cause_class']}")
+    print(f"Evidence chain still valid: {svc.chain.verify_chain(flood.incident_id)}")
     return svc
 
 

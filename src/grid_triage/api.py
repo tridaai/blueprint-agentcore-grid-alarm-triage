@@ -4,7 +4,8 @@ service graph the Runtime entrypoint uses.
 This FastAPI app is the local/operations API (ingest, alarms,
 incidents, topology versions, brief assembly, chain verification;
 Round 3 adds classification, memory records, priors and evidence
-pack seal/verify).
+pack seal/verify; Round 4 adds ETR estimates, the closure act and
+the accuracy ledger).
 The agent itself is invoked through the AgentCore Runtime app
 (``grid_triage.runtime_app``); this API exists so operators and
 tests can see and drive the triage work without an AWS account.
@@ -23,8 +24,10 @@ from grid_triage import __version__
 from grid_triage.agent import (
     BandMismatchRefusal,
     CitationRefusal,
+    EtrBasisRefusal,
     PriorAttributionRefusal,
 )
+from grid_triage.closure import ClosureRefusal
 from grid_triage.models import Alarm
 from grid_triage.packs import PackRefusal
 from grid_triage.services import DuplicateAlarm
@@ -142,7 +145,12 @@ def assemble_brief(incident_id: str) -> dict:
         raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
     try:
         brief = s.assembler.assemble(incident_id, datetime.now(timezone.utc))
-    except (CitationRefusal, BandMismatchRefusal, PriorAttributionRefusal) as exc:
+    except (
+        CitationRefusal,
+        BandMismatchRefusal,
+        PriorAttributionRefusal,
+        EtrBasisRefusal,
+    ) as exc:
         raise HTTPException(status_code=422, detail={"problems": exc.problems}) from exc
     return brief.model_dump(mode="json")
 
@@ -337,6 +345,90 @@ def acknowledge_severity(request: AcknowledgeRequest) -> dict:
     except SeverityRefusal as exc:
         raise HTTPException(status_code=422, detail={"problems": exc.problems}) from exc
     return ack.model_dump(mode="json")
+
+
+# -- Round 4: ETR estimates, closure, the accuracy ledger -------------
+
+
+class EstimateRequest(BaseModel):
+    as_of: datetime | None = None
+
+
+@app.get("/incidents/{incident_id}/etr")
+def get_etr(incident_id: str) -> dict:
+    s = svc()
+    if s.store.get_incident(incident_id) is None:
+        raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
+    history = s.etr.history(incident_id)
+    return {
+        "incident_id": incident_id,
+        "current": history[-1].model_dump(mode="json") if history else None,
+        "history": [e.model_dump(mode="json") for e in history],
+    }
+
+
+@app.post("/incidents/{incident_id}/etr/estimate")
+def estimate_etr(incident_id: str, request: EstimateRequest | None = None) -> dict:
+    s = svc()
+    if s.store.get_incident(incident_id) is None:
+        raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
+    as_of = (request.as_of if request else None) or datetime.now(timezone.utc)
+    estimate = s.etr.estimate(incident_id, as_of)
+    return estimate.model_dump(mode="json")
+
+
+@app.get("/roster")
+def get_roster() -> dict:
+    return svc().roster.payload
+
+
+class CloseRequest(BaseModel):
+    closed_by: str
+    role: str
+    restored_at: datetime
+    resolution_summary: str
+
+
+@app.post("/incidents/{incident_id}/close")
+def close_incident(incident_id: str, request: CloseRequest) -> dict:
+    s = svc()
+    try:
+        closure, outcome, record = s.closure.close_incident(
+            incident_id,
+            request.closed_by,
+            request.role,
+            request.restored_at,
+            request.resolution_summary,
+            datetime.now(timezone.utc),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ClosureRefusal as exc:
+        raise HTTPException(status_code=422, detail={"problems": exc.problems}) from exc
+    return {
+        "closure": closure.model_dump(mode="json"),
+        "outcome": outcome.model_dump(mode="json"),
+        "memory_record": record.model_dump(mode="json"),
+    }
+
+
+@app.get("/incidents/{incident_id}/closure")
+def get_closure(incident_id: str) -> dict:
+    s = svc()
+    if s.store.get_incident(incident_id) is None:
+        raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
+    closure = s.closure.closure_for(incident_id)
+    outcomes = s.store.list_etr_outcomes(incident_id)
+    return {
+        "incident_id": incident_id,
+        "closure": closure.model_dump(mode="json") if closure else None,
+        "outcome": outcomes[0].model_dump(mode="json") if outcomes else None,
+    }
+
+
+@app.get("/etr/accuracy")
+def etr_accuracy() -> dict:
+    return svc().closure.accuracy_ledger()
 
 
 @app.get("/incidents/{incident_id}/chain")

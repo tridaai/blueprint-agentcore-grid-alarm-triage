@@ -1,7 +1,7 @@
 """Operator CLI: read-only views over the store, plus the recorded
-human acts — the Round 2 acknowledgement, the Round 3 pack seal.
-None of them is an operation on the grid (Law 1 — the CLI has no
-verb that operates anything)."""
+human acts — the Round 2 acknowledgement, the Round 3 pack seal,
+the Round 4 incident closure. None of them is an operation on
+the grid (Law 1 — the CLI has no verb that operates anything)."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import argparse
 import json
 from datetime import datetime, timezone
 
+from grid_triage.closure import ClosureRefusal
 from grid_triage.packs import PackRefusal
 from grid_triage.severity import SeverityRefusal
 from grid_triage.wiring import build_services
@@ -50,6 +51,21 @@ def main(argv: list[str] | None = None) -> int:
     p_packs.add_argument("incident_id")
     p_verify = sub.add_parser("verify-pack")
     p_verify.add_argument("pack_id")
+    p_etr = sub.add_parser("etr")
+    p_etr.add_argument("incident_id")
+    p_estimate = sub.add_parser("estimate")
+    p_estimate.add_argument("incident_id")
+    p_estimate.add_argument("--as-of", default=None, help="ISO timestamp; default: now")
+    p_close = sub.add_parser("close")
+    p_close.add_argument("incident_id")
+    p_close.add_argument("--by", required=True, help="the closing operator's name")
+    p_close.add_argument("--role", required=True, help="the closing operator's role")
+    p_close.add_argument("--restored-at", required=True, help="ISO timestamp supply was restored")
+    p_close.add_argument("--summary", required=True, help="the resolution facts, as recorded")
+    p_closure = sub.add_parser("closure")
+    p_closure.add_argument("incident_id")
+    sub.add_parser("etr-accuracy")
+    sub.add_parser("roster")
     args = parser.parse_args(argv)
 
     svc = build_services()
@@ -187,6 +203,64 @@ def main(argv: list[str] | None = None) -> int:
             indent=2,
         ))
         return 0 if not problems else 1
+    elif args.command == "etr":
+        if svc.store.get_incident(args.incident_id) is None:
+            print(f"no such incident: {args.incident_id}")
+            return 1
+        history = svc.etr.history(args.incident_id)
+        print(json.dumps({
+            "incident_id": args.incident_id,
+            "current": history[-1].model_dump(mode="json") if history else None,
+            "history": [e.model_dump(mode="json") for e in history],
+        }, indent=2))
+    elif args.command == "estimate":
+        as_of = (
+            datetime.fromisoformat(args.as_of)
+            if args.as_of
+            else datetime.now(timezone.utc)
+        )
+        try:
+            estimate = svc.etr.estimate(args.incident_id, as_of)
+        except KeyError:
+            print(f"no such incident: {args.incident_id}")
+            return 1
+        print(json.dumps(estimate.model_dump(mode="json"), indent=2))
+    elif args.command == "close":
+        try:
+            closure, outcome, record = svc.closure.close_incident(
+                args.incident_id,
+                args.by,
+                args.role,
+                datetime.fromisoformat(args.restored_at),
+                args.summary,
+                datetime.now(timezone.utc),
+            )
+        except KeyError:
+            print(f"no such incident: {args.incident_id}")
+            return 1
+        except ClosureRefusal as exc:
+            print("refused: " + "; ".join(exc.problems))
+            return 1
+        print(json.dumps({
+            "closure": closure.model_dump(mode="json"),
+            "outcome": outcome.model_dump(mode="json"),
+            "memory_record": record.model_dump(mode="json"),
+        }, indent=2))
+    elif args.command == "closure":
+        if svc.store.get_incident(args.incident_id) is None:
+            print(f"no such incident: {args.incident_id}")
+            return 1
+        closure = svc.closure.closure_for(args.incident_id)
+        outcomes = svc.store.list_etr_outcomes(args.incident_id)
+        print(json.dumps({
+            "incident_id": args.incident_id,
+            "closure": closure.model_dump(mode="json") if closure else None,
+            "outcome": outcomes[0].model_dump(mode="json") if outcomes else None,
+        }, indent=2))
+    elif args.command == "etr-accuracy":
+        print(json.dumps(svc.closure.accuracy_ledger(), indent=2))
+    elif args.command == "roster":
+        print(json.dumps(svc.roster.payload, indent=2))
     return 0
 
 

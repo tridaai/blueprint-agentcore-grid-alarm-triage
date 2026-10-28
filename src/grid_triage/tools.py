@@ -48,6 +48,11 @@ TOOL_REGISTRY: list[ToolSpec] = [
         description="Read an incident's current severity assessment and its history (Round 2).",
     ),
     ToolSpec(
+        name="get_etr_estimate",
+        shape=ToolShape.READ,
+        description="Read an incident's current ETR estimate and its history, with the estimate's stated basis (Round 4).",
+    ),
+    ToolSpec(
         name="list_escalation_queue",
         shape=ToolShape.READ,
         description="List severity assessments still awaiting a required operator acknowledgement (Round 2).",

@@ -24,6 +24,12 @@ payload names one piece of triage work:
   port (local double) and prior retrieval.
 - ``{"action": "seal_pack" | "get_pack" | "list_packs" |
   "verify_pack", ...}`` — the Round 3 evidence pack acts.
+- ``{"action": "estimate_etr" | "get_etr", ...}`` — the Round 4
+  ETR engine: compute an estimate at an explicit ``as_of``, or
+  read the current estimate and its history.
+- ``{"action": "close_incident" | "get_closure" |
+  "etr_accuracy" | "get_roster", ...}`` — the Round 4 closure
+  act, the ETR accuracy ledger, and the crew roster artefact.
 
 The Runtime session id (``context.session_id``) maps to one
 triage session and is carried into the logs. All domain work
@@ -40,9 +46,11 @@ from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from grid_triage.agent import (
     BandMismatchRefusal,
     CitationRefusal,
+    EtrBasisRefusal,
     ModelNotConfigured,
     PriorAttributionRefusal,
 )
+from grid_triage.closure import ClosureRefusal
 from grid_triage.models import Alarm
 from grid_triage.packs import PackRefusal
 from grid_triage.services import DuplicateAlarm
@@ -74,7 +82,12 @@ def handle_invocation(payload: dict, session_id: str | None = None) -> dict:
         incident_id = payload["incident_id"]
         try:
             brief = svc.assembler.assemble(incident_id, now)
-        except (CitationRefusal, BandMismatchRefusal, PriorAttributionRefusal) as exc:
+        except (
+            CitationRefusal,
+            BandMismatchRefusal,
+            PriorAttributionRefusal,
+            EtrBasisRefusal,
+        ) as exc:
             log.warning("brief refused for %s: %s", incident_id, exc, extra=extra)
             return {"status": "refused", "incident_id": incident_id, "problems": exc.problems}
         except ModelNotConfigured as exc:
@@ -236,6 +249,74 @@ def handle_invocation(payload: dict, session_id: str | None = None) -> dict:
             "valid": not problems,
             "problems": problems,
         }
+    if action == "estimate_etr":
+        incident_id = payload["incident_id"]
+        as_of = now
+        if payload.get("as_of"):
+            as_of = datetime.fromisoformat(payload["as_of"])
+        try:
+            estimate = svc.etr.estimate(incident_id, as_of)
+        except KeyError:
+            return {"status": "no_such_incident", "incident_id": incident_id}
+        return {
+            "status": "estimated",
+            "incident_id": incident_id,
+            "estimate": estimate.model_dump(mode="json"),
+        }
+    if action == "get_etr":
+        incident_id = payload["incident_id"]
+        if svc.store.get_incident(incident_id) is None:
+            return {"status": "no_such_incident", "incident_id": incident_id}
+        history = svc.etr.history(incident_id)
+        return {
+            "status": "ok",
+            "incident_id": incident_id,
+            "current": history[-1].model_dump(mode="json") if history else None,
+            "history": [e.model_dump(mode="json") for e in history],
+        }
+    if action == "close_incident":
+        incident_id = payload["incident_id"]
+        restored_at = payload.get("restored_at")
+        try:
+            closure, outcome, record = svc.closure.close_incident(
+                incident_id,
+                payload.get("closed_by", ""),
+                payload.get("role", ""),
+                datetime.fromisoformat(restored_at) if restored_at else now,
+                payload.get("resolution_summary", ""),
+                now,
+            )
+        except KeyError:
+            return {"status": "no_such_incident", "incident_id": incident_id}
+        except ClosureRefusal as exc:
+            return {
+                "status": "refused",
+                "incident_id": incident_id,
+                "problems": exc.problems,
+            }
+        return {
+            "status": "closed",
+            "incident_id": incident_id,
+            "closure": closure.model_dump(mode="json"),
+            "outcome": outcome.model_dump(mode="json"),
+            "memory_record": record.model_dump(mode="json"),
+        }
+    if action == "get_closure":
+        incident_id = payload["incident_id"]
+        if svc.store.get_incident(incident_id) is None:
+            return {"status": "no_such_incident", "incident_id": incident_id}
+        closure = svc.closure.closure_for(incident_id)
+        outcomes = svc.store.list_etr_outcomes(incident_id)
+        return {
+            "status": "ok",
+            "incident_id": incident_id,
+            "closure": closure.model_dump(mode="json") if closure else None,
+            "outcome": outcomes[0].model_dump(mode="json") if outcomes else None,
+        }
+    if action == "etr_accuracy":
+        return {"status": "ok", "ledger": svc.closure.accuracy_ledger()}
+    if action == "get_roster":
+        return {"status": "ok", "roster": svc.roster.payload}
     if action == "ingest_and_brief":
         alarms = [Alarm.model_validate(a) for a in payload.get("alarms", [])]
         try:
