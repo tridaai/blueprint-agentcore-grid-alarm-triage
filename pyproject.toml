@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trida-blueprint-agentcore-grid-alarm-triage"
+version = "0.1.0"
+description = "Trida AI Blueprint — Grid Alarm Triage & Field Work Agent on AWS Bedrock AgentCore (reference prototype)"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.11,<3.13"
+# Direct dependencies are pinned EXACTLY (==). The full transitive set is
+# frozen in constraints.txt; the pip fallback installs that set first and
+# the package itself second (see Makefile, target install-pip).
+dependencies = [
+    # The AgentCore Runtime SDK: BedrockAgentCoreApp serves the Runtime
+    # contract (POST /invocations, GET /ping) on port 8080.
+    "bedrock-agentcore==1.25.1",
+    "fastapi==0.143.0",
+    "pydantic==2.14.0",
+    "uvicorn==0.54.0",
+    "psycopg[binary]==3.2.9",
+    "httpx==0.28.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==9.1.1", "httpx==0.28.1"]
+
+[project.scripts]
+grid-agent = "grid_triage.cli:main"
+grid-agent-demo = "grid_triage.demo:main"
+grid-agent-serve = "grid_triage.runtime_main:main"
+grid-agent-invoke = "grid_triage.local_invoke:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
