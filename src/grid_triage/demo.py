@@ -508,6 +508,41 @@ def run_demo(settings: Settings | None = None) -> Services:
         )
         + "."
     )
+    # Round 9: the shift changes mid-storm. The outgoing
+    # operator's handover is assembled from the artefacts alone —
+    # the storm window is in its storm section, named by its
+    # declaring act — and the incoming operator accepts it,
+    # bound to its record hash.
+    handover = svc.handover.assemble(
+        "op.dana", "operator", burst_t0 + timedelta(minutes=95)
+    )
+    acceptance = svc.handover.accept(
+        handover.handover_id, "op.reyes", "operator",
+        burst_t0 + timedelta(minutes=96),
+    )
+    handover_counts = {
+        key: len(handover.sections[key])
+        for key in ("open_incidents", "open_work_orders", "unconfirmed_restorations")
+    }
+    print(
+        f"Shift handover {handover.handover_id} assembled by "
+        f"{handover.handed_over_by} mid-storm: {handover_counts}, "
+        f"storm active in its sections: "
+        f"{handover.sections['storm']['active']} (declaration "
+        f"{handover.sections['storm']['windows'][0]['declaration_id']}); "
+        f"accepted by {acceptance.accepted_by}, bound to record "
+        f"hash {acceptance.record_hash[:12]}…"
+    )
+    # Reyes, now holding the shift, assembles the next handover —
+    # a new artefact superseding Dana's by link.
+    next_handover = svc.handover.assemble(
+        "op.reyes", "operator", burst_t0 + timedelta(minutes=100)
+    )
+    print(
+        f"Next handover {next_handover.handover_id} supersedes "
+        f"{next_handover.supersedes} — the chain is links between "
+        "insert-only artefacts, never edits."
+    )
     _, storm_outcome, _ = svc.closure.close_incident(
         storm_incident.incident_id,
         "op.dana",
@@ -523,6 +558,33 @@ def run_demo(settings: Settings | None = None) -> Services:
         f"estimated {storm_outcome.estimated_duration_minutes} "
         f"(signed error {storm_outcome.signed_error_minutes:+}) — "
         f"the outcome records mode {storm_outcome.operating_mode}."
+    )
+    # The close moved the record — Reyes's handover is stale on
+    # its face now, and the next operator's acceptance of it is
+    # refused with the drift named. A fresh handover over the
+    # moved record is the way forward.
+    from grid_triage.handover import HandoverRefusal
+
+    try:
+        svc.handover.accept(
+            next_handover.handover_id, "op.okafor", "operator",
+            burst_t0 + timedelta(minutes=402),
+        )
+        print("ERROR: a stale handover was accepted")
+    except HandoverRefusal as exc:
+        print(f"Stale handover refused at acceptance: {exc.problems[-1]}")
+    fresh_handover = svc.handover.assemble(
+        "op.reyes", "operator", burst_t0 + timedelta(minutes=403)
+    )
+    fresh_acceptance = svc.handover.accept(
+        fresh_handover.handover_id, "op.okafor", "operator",
+        burst_t0 + timedelta(minutes=404),
+    )
+    print(
+        f"Fresh handover {fresh_handover.handover_id} (supersedes "
+        f"{fresh_handover.supersedes}) accepted by "
+        f"{fresh_acceptance.accepted_by}; its sections re-perform "
+        f"clean: {svc.handover.verify(fresh_handover.handover_id)}."
     )
     from grid_triage.storm import StormRefusal
 

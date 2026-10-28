@@ -1,4 +1,4 @@
-"""Eval gate — Rounds 1–8 (grid alarm triage agent).
+"""Eval gate — Rounds 1–9 (grid alarm triage agent).
 
 Runs the planted streams through the real service graph on a
 throwaway SQLite store and grades the R1–R5 guarantees. Every
@@ -204,6 +204,27 @@ counter is zero-tolerance unless marked otherwise:
                                  verify that is not clean, or a
                                  tampered figure the verifier
                                  does not name
+  console_figures_without_artefact
+                                 a console board figure — an open
+                                 incident, a band, an ETR figure, a
+                                 work-order state, a feeder count,
+                                 the storm banner's declaration —
+                                 that does not re-perform from the
+                                 artefacts read straight off the
+                                 store
+  handover_figure_mismatches     a handover whose sections are
+                                 not the board's figures, whose
+                                 hand-checked figures disagree, whose
+                                 acceptance does not bind its record
+                                 hash, whose supersession link is
+                                 wrong, whose drift goes unnamed, or
+                                 whose tampered figure the verifier
+                                 does not name
+  stale_handover_acceptances     an acceptance recorded for a
+                                 handover over a moved record
+  control_surfaces_present       the console page carrying a
+                                 form, a POST, a second fetch, or a
+                                 control verb anywhere in its file
 
 Run: uv run python evals/run_evals.py  (exit 0 = GATE: PASS)
 """
@@ -1620,7 +1641,187 @@ def main() -> int:
         if svc.storm.verify_review(review8.review_id):
             counters["storm_review_errors"] += 1
 
-    print("Evals — grid alarm triage agent (Rounds 1-8)")
+    # --- Round 9: the console board and the shift handover ---
+    counters["console_figures_without_artefact"] = 0
+    counters["handover_figure_mismatches"] = 0
+    counters["stale_handover_acceptances"] = 0
+    counters["control_surfaces_present"] = 0
+
+    from grid_triage.handover import HandoverRefusal
+
+    r9_at = datetime.now(timezone.utc)
+    # A second cell is declared as the shift changes — the
+    # board's storm banner must name this declaring act.
+    declaration9 = svc.storm.declare(
+        "op.dana", "operator",
+        "Second cell approaching the Alder service area",
+        r9_at - timedelta(minutes=30), feeders=["FDR-03"],
+    )
+    board9 = svc.board.board(r9_at)
+    # Independent re-performance from raw store reads.
+    superseded9 = {
+        r.prior_incident_id for r in svc.store.list_incident_revisions()
+    } | {s.incident_id for s in svc.store.list_incident_splits()}
+
+    def _closed9(incident_id: str) -> bool:
+        return (
+            svc.store.get_incident_closure(incident_id) is not None
+            or svc.store.get_incident_close_act(incident_id) is not None
+        )
+
+    open9 = [
+        i
+        for i in svc.store.list_incidents()
+        if i.incident_id not in superseded9 and not _closed9(i.incident_id)
+    ]
+    if {r["incident_id"] for r in board9["incidents"]} != {
+        i.incident_id for i in open9
+    }:
+        counters["console_figures_without_artefact"] += 1
+    for row in board9["incidents"]:
+        history = svc.store.list_severity_assessments(row["incident_id"])
+        band = history[-1].band if history else "UNASSESSED"
+        if row["band"] != band:
+            counters["console_figures_without_artefact"] += 1
+        if row["member_alarm_count"] != len(
+            svc.store.list_memberships(row["incident_id"])
+        ):
+            counters["console_figures_without_artefact"] += 1
+    for row in board9["etr"]:
+        history = svc.store.list_etr_estimates(row["incident_id"])
+        if history:
+            if (
+                row["estimate_id"] != history[-1].estimate_id
+                or row["total_minutes"] != history[-1].total_minutes
+                or row["basis"] != history[-1].basis
+            ):
+                counters["console_figures_without_artefact"] += 1
+        elif row["status"] != "no_estimate":
+            counters["console_figures_without_artefact"] += 1
+    for row in board9["work_orders"]:
+        decisions = svc.store.list_work_order_decisions(row["order_id"])
+        state = decisions[-1].decision if decisions else "draft"
+        if row["state"] != state:
+            counters["console_figures_without_artefact"] += 1
+    if not board9["storm"]["active"] or [
+        w["declaration_id"] for w in board9["storm"]["windows"]
+    ] != [declaration9.declaration_id]:
+        counters["console_figures_without_artefact"] += 1
+    feeder7_row = next(
+        r for r in board9["feeders"] if r["feeder_id"] == "FDR-07"
+    )
+    payload9 = svc.store.get_topology_payload("v1")
+    if feeder7_row["device_count"] != sum(
+        1 for d in payload9["devices"] if d["feeder_id"] == "FDR-07"
+    ):
+        counters["console_figures_without_artefact"] += 1
+
+    # The handover over this record: its sections are the
+    # board's, its figures re-perform by hand, and its
+    # acceptance binds the record hash.
+    handover9 = svc.handover.assemble("op.dana", "operator", r9_at)
+    if handover9.sections != svc.board.sections(r9_at):
+        counters["handover_figure_mismatches"] += 1
+    if svc.handover.verify(handover9.handover_id):
+        counters["handover_figure_mismatches"] += 1
+    if {
+        r["incident_id"] for r in handover9.sections["open_incidents"]
+    } != {i.incident_id for i in open9}:
+        counters["handover_figure_mismatches"] += 1
+    outcomes9 = svc.store.list_etr_outcomes()
+    if handover9.sections["etr_accuracy"]["overall"][
+        "compared_count"
+    ] != sum(1 for o in outcomes9 if o.status == "compared"):
+        counters["handover_figure_mismatches"] += 1
+    acceptance9 = svc.handover.accept(
+        handover9.handover_id, "op.reyes", "operator",
+        r9_at + timedelta(minutes=1),
+    )
+    if acceptance9.record_hash != handover9.record_hash:
+        counters["handover_figure_mismatches"] += 1
+
+    # The record moves under a fresh handover — twice — and the
+    # stale one must be refused at acceptance, drift named.
+    svc.severity.assess(open9[0].incident_id, r9_at + timedelta(minutes=2))
+    handover9b = svc.handover.assemble(
+        "op.reyes", "operator", r9_at + timedelta(minutes=3)
+    )
+    if handover9b.supersedes != handover9.handover_id:
+        counters["handover_figure_mismatches"] += 1
+    svc.severity.assess(open9[0].incident_id, r9_at + timedelta(minutes=4))
+    if not svc.handover.verify(handover9b.handover_id):
+        counters["handover_figure_mismatches"] += 1  # drift went unnamed
+    try:
+        svc.handover.accept(
+            handover9b.handover_id, "op.okafor", "operator",
+            r9_at + timedelta(minutes=5),
+        )
+        counters["stale_handover_acceptances"] += 1
+    except HandoverRefusal:
+        pass
+    if svc.handover.acceptance_for(handover9b.handover_id) is not None:
+        counters["stale_handover_acceptances"] += 1
+    # A tampered stored figure is named by the verifier.
+    raw = sqlite3.connect(svc.settings.sqlite_path)
+    payload9h = json.loads(
+        raw.execute(
+            "SELECT payload FROM shift_handovers WHERE handover_id = ?",
+            (handover9b.handover_id,),
+        ).fetchone()[0]
+    )
+    original9 = payload9h["sections"]["etr_accuracy"]["overall"][
+        "compared_count"
+    ]
+    payload9h["sections"]["etr_accuracy"]["overall"]["compared_count"] = 999
+    raw.execute(
+        "UPDATE shift_handovers SET payload = ? WHERE handover_id = ?",
+        (json.dumps(payload9h), handover9b.handover_id),
+    )
+    raw.commit()
+    if not any(
+        "record hash" in p
+        for p in svc.handover.verify(handover9b.handover_id)
+    ):
+        counters["handover_figure_mismatches"] += 1  # tamper unnamed
+    payload9h["sections"]["etr_accuracy"]["overall"]["compared_count"] = (
+        original9
+    )
+    raw.execute(
+        "UPDATE shift_handovers SET payload = ? WHERE handover_id = ?",
+        (json.dumps(payload9h), handover9b.handover_id),
+    )
+    raw.commit()
+    raw.close()
+
+    # Law 1 on the page itself: no form, no POST, exactly one
+    # read fetch, no control verb anywhere in the file.
+    console_html = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "grid_triage"
+        / "static"
+        / "console.html"
+    ).read_text(encoding="utf-8")
+    if (
+        "<form" in console_html
+        or "POST" in console_html
+        or console_html.count("fetch(") != 1
+    ):
+        counters["control_surfaces_present"] += 1
+    for verb in (
+        "reclos",
+        "setpoint",
+        "energize",
+        "de-energize",
+        "load shedding",
+        "trip_breaker",
+        "open_breaker",
+        "close_breaker",
+    ):
+        if verb in console_html.lower():
+            counters["control_surfaces_present"] += 1
+
+    print("Evals — grid alarm triage agent (Rounds 1-9)")
     for name, value in counters.items():
         print(f"  {name}: {value} (required 0)")
     failed = [n for n, v in counters.items() if v != 0]
