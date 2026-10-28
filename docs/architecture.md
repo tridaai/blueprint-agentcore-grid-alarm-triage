@@ -21,7 +21,7 @@ fill.
 | **Runtime** | The agent's home: one microVM session per triage session, HTTP contract on port 8080 (`POST /invocations`, `GET /ping`), ARM64 container, sessions to the 8-hour envelope (storm events; hand-off at the edge is a documented pattern, not yet built) | **Real.** `grid_triage/runtime_app.py` serves the contract via the installed `bedrock-agentcore` SDK's `BedrockAgentCoreApp`; graded over ASGI transport in `tests/test_runtime_contract.py`. |
 | **Gateway** | SCADA-adjacent historian, OMS and AMI/meter systems exposed as read-only MCP targets — the single tool path | **Port-shaped.** The tool catalogue (`grid_triage/tools.py`) is the contract the Gateway targets will implement; the MCP wiring lands in Round 11. No Gateway is called in R1. |
 | **Policy** | Cedar pack on the Gateway: allow read/draft/notify, deny every control-shaped call, deny out-of-area reads; denials arrive as HTTP 200 + JSON-RPC −32002 and must be detected in code | **Designed, not yet shipped.** R1 enforces Law 1 by construction + registry scan. The pack itself is Round 11. |
-| **Memory** | Episodic memory of prior incidents per feeder/device, feeding correlation as recorded inputs | **Not in R1.** Arrives Round 3 with the evidence pack, behind the memory port. |
+| **Memory** | Episodic memory of prior incidents per feeder/device, feeding briefs (and, later, correlation) as recorded inputs | **Port + local double (R3).** `grid_triage/memory.py` defines the port in the managed service's event-memory shape — closed incidents as records of fact — served locally by a double over the store. Records are insert-only, retrieval is weighted and deterministic, and briefs cite records directly. No live AgentCore Memory call is made. |
 | **Identity** | Operator / dispatcher / field / auditor roles; control-room caller identity on every act | **Not in R1.** Access control is Round 16; the acts R1 records (ingest, correlation, brief) are system acts by design. |
 | **Evaluations** | AgentCore Evaluations on live traces (correctness/faithfulness), sampled online | **Repo-side only in R1.** The deterministic eval gate (`evals/run_evals.py`) is the primary gate; AgentCore evaluator configs join the infra artefacts at release hardening (R20). |
 | **Observability** | OpenTelemetry traces to CloudWatch as the incident audit trail | **Shaped.** Structured JSON logs with session/incident ids (`grid_triage/logging_config.py`); the console trace timeline is Round 13. |
@@ -67,6 +67,42 @@ resolving brief is stored. The loop's tools are the registry's
 read/draft shapes (`grid_triage/tools.py`); the registry is also
 the Law 1 enforcement point — its shapes are an enum with no
 control value, and a test scans it for control verbs.
+
+**Severity is a formula, classification is a pack (Laws 3 + R3).**
+The severity engine (R2) computes the band from recorded inputs
+under a versioned formula pack; assessments are content-addressed
+and supersede by link. The classification pack (R3) assigns a
+probable-cause *class* from the anchor alarm's pattern under
+ordered rules — first match wins, the rule id is recorded, and a
+non-matching pattern is `unknown`, never forced — because the
+class is consumed downstream as a fact (retrieval weighting,
+reporting), and a fabricated class would contaminate both.
+
+**Memory is records of fact, insert-only (R3).** A closed
+incident becomes a memory record assembled from its stored facts
+only — classification of record, current severity assessment,
+membership — plus the resolution summary recorded at close. The
+port exposes put/get/list/retrieve and nothing else: no update,
+no delete, and the store refuses a re-insert under an existing
+record id with different content. Retrieval scores candidates
+under stated weights (class 4, feeder 3, anchor device 2, device
+overlap 1, shared terms capped 3) and requires a structural basis
+— same feeder, same anchor device, or a shared device — so term
+overlap ranks but never qualifies. Brief citations may name a
+memory record id; the resolver checks the cited field against the
+record as stored, and a brief attributing a class to a prior that
+the record does not state is refused whole.
+
+**Evidence packs are sealed manifests (R3).** Sealing (a named
+act) snapshots the incident's artefacts of record — member alarms
+with chain references, correlation decisions, the current
+severity assessment, the topology slice at the pinned version,
+the latest brief, the retrieved priors — each member carrying the
+hash of its content, under a manifest hash. Packs supersede by
+version, never by edit; verification recomputes every member from
+its source of record and the evidence chain whole, so an old pack
+still verifies after its members are superseded — the artefacts
+it points at are themselves immutable.
 
 ## Stores
 

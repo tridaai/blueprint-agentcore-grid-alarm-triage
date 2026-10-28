@@ -93,6 +93,60 @@ programme.
   PostgreSQL dialect behind the same implementation, numbered
   migrations in both dialects.
 
+## What Round 2 builds
+
+- **The severity engine** (`grid_triage/severity.py`): a versioned
+  formula pack computes each incident's band from customers
+  affected (topology data over the anchor's outage slice),
+  critical-load weights, duration and alarm breadth. Assessments
+  are content-addressed, record every input and weight, and
+  supersede by link — never edited. A band the data cannot
+  support is `UNRATED` with the missing inputs named. Bands at
+  escalation thresholds require a named operator's
+  acknowledgement, and the brief may restate only the assessed
+  band — a mismatched band refuses the brief in code.
+
+## What Round 3 builds
+
+- **Root-cause classification** (`grid_triage/cause.py`): a
+  versioned rule pack over the anchor alarm's pattern assigns a
+  probable-cause class (vegetation contact, equipment failure,
+  lightning) with the rule that fired, recorded on the incident's
+  evidence chain. A pattern no rule matches stays `unknown` —
+  never forced into the nearest class.
+- **The memory port** (`grid_triage/memory.py`): closed incidents
+  live on as episodic memory records — feeder, devices, cause
+  class, computed band, and the resolution as recorded at close.
+  In production this port is Amazon Bedrock AgentCore Memory; here
+  it is a **local double over the store port, labelled as such**.
+  Records are insert-only: the port has no update and no delete,
+  and the store refuses a re-insert that would change a record's
+  facts. Retrieval for a live incident is deterministic — stated
+  weights for same class (+4), same feeder (+3), same anchor
+  device (+2), device overlap (+1) and shared terms (capped +3) —
+  and a record qualifies only on a structural basis, never on
+  wording alone.
+- **Briefs that cite priors**: the assembler classifies the
+  incident, retrieves its priors, and hands them to the model as
+  facts. A prior may be quoted only as recorded — citations
+  resolve against the memory records themselves, and a statement
+  attributing a cause class to a prior that its record does not
+  state **refuses the whole brief**.
+- **Sealed evidence packs** (`grid_triage/packs.py`): a named
+  operator seals everything an incident rests on — member alarms
+  with their chain references, the correlation decisions, the
+  current severity assessment, the topology slice at the pinned
+  version, the latest brief, and the priors retrieved — into a
+  manifest whose hash covers every member. Packs are never
+  edited: resealing after a member is superseded produces the
+  next version, linked to the last, and the old pack still
+  verifies. Verification recomputes every member hash from its
+  source of record, plus the evidence chain; drift comes back as
+  named problems.
+- Migration 0003 (both dialects), and classification / memory /
+  priors / pack surfaces at parity across the operations API, the
+  Runtime invocation handler and the CLI.
+
 ## Quick start
 
 ```bash
@@ -109,12 +163,20 @@ make invoke           # local in-process invoke of the agent step
 
 What is built and what is not, plainly:
 
-- **Severity is Round 2.** Incidents carry no severity band yet;
-  the formula (customers × critical loads × duration) lands next
-  round. Critical-load data is already in the topology.
+- **Severity is computed (Round 2)** by a versioned formula pack
+  — customers × critical loads × duration × breadth — with
+  content-addressed assessments and an operator acknowledgement
+  queue for escalation bands. **Classification, memory and
+  evidence packs are Round 3** (above).
+- **Memory here is a local double.** The memory port's production
+  shape is Amazon Bedrock AgentCore Memory; nothing in this build
+  has called it. The double exists so the record shape, the
+  insert-only discipline and the retrieval arithmetic are built
+  and graded offline.
 - **ETR is Round 4, work orders Round 5, the operator approval
-  gate Round 6, storm mode Round 9.** In R1 the agent assembles
-  briefs and stops; nobody is dispatched and nothing is approved.
+  gate Round 6, storm mode Round 9.** The agent assembles briefs
+  and seals packs and stops; nobody is dispatched and nothing is
+  approved.
 - **The AgentCore Policy pack is Round 11.** In R1, Law 1 (no
   control) is enforced by the tool catalogue's construction and
   the registry scan; the Cedar policy pack at the Gateway is the
@@ -138,11 +200,12 @@ What is built and what is not, plainly:
 ```
 src/grid_triage/   models, topology, correlation, services (ingest),
                    evidence, store, agent, tools (Law 1 registry),
+                   severity (R2), cause / memory / packs (R3),
                    runtime_app / runtime_main (AgentCore Runtime),
                    api, demo, cli, local_invoke, wiring, config
 data/topology/     versioned territory data (v1.json)
 migrations/        numbered SQL migrations, sqlite + postgres trees
-tests/             pytest suite (36 tests in R1)
+tests/             pytest suite (81 tests through R3)
 evals/             the eval gate (run_evals.py)
 docs/              architecture.md — the honest AgentCore mapping
 ```
