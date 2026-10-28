@@ -359,6 +359,87 @@ class WorkOrderDecision(BaseModel):
     notification_ids: list[str] = Field(default_factory=list)
 
 
+class FieldUpdate(BaseModel):
+    """One field update posted against one incident (Round 6).
+
+    Field crews and dispatchers report back against an incident:
+    a new alarm observation, a crew note, a damage finding. The
+    update kinds are a versioned pack's vocabulary, and updates
+    are insert-only artefacts on the incident's evidence chain.
+    An update carrying a new alarm is correlated under the
+    incident's **pinned** topology version — never silently under
+    a newer one — and the outcome is recorded on the update
+    itself in ``correlation``: ``joined`` with the rule that
+    placed it, or a named non-join (``unresolvable_under_pinned_
+    topology`` when the alarm's device does not exist in the
+    pinned version, ``no_join`` when the pack does not place it
+    in this incident).
+    """
+
+    update_id: str
+    incident_id: str
+    pack_version: str
+    kind: str  # alarm_observation | crew_note | damage_finding
+    reported_by: str
+    role: str
+    reported_at: datetime
+    note: str | None = None
+    device_id: str | None = None
+    finding: str | None = None
+    alarm_id: str | None = None
+    correlation: dict = Field(default_factory=dict)
+
+
+class TopologyDeclaration(BaseModel):
+    """A named operator's act declaring a topology version
+    effective (Round 6, Law 6). A topology change is data (the
+    version payload) plus this act: who declared it, in what
+    role, and from when it is effective. Re-correlation under
+    the version is impossible before its effective time and
+    impossible at all without this act — no silent migration.
+    The ``change_set`` is carried verbatim from the version
+    payload, so the act states what changed."""
+
+    declaration_id: str
+    version: str
+    pack_version: str
+    declared_by: str
+    role: str
+    declared_at: datetime
+    effective_at: datetime
+    change_set: list[dict] = Field(default_factory=list)
+
+
+class IncidentRevision(BaseModel):
+    """One re-correlation of one incident under a newer topology
+    version (Round 6, Law 6). The revision is a new incident row
+    (``revised_incident_id``) correlated under the new version;
+    this record links it to the revision it supersedes and
+    states the diff: alarms and devices added and removed,
+    the topology change set applied, the severity recomputation
+    (band change and the formula inputs that moved), and the
+    ETR estimates on both sides, linked by id. The prior
+    incident's own artefacts are never edited — supersession
+    lives here, on the link."""
+
+    revision_id: str
+    prior_incident_id: str
+    revised_incident_id: str
+    revision_number: int
+    base_topology_version: str
+    target_topology_version: str
+    declaration_id: str
+    recorrelated_by: str
+    role: str
+    recorrelated_at: datetime
+    diff: dict = Field(default_factory=dict)
+    severity_change: dict = Field(default_factory=dict)
+    prior_classification_id: str | None = None
+    revised_classification_id: str | None = None
+    prior_estimate_id: str | None = None
+    revised_estimate_id: str | None = None
+
+
 class Notification(BaseModel):
     """A recorded notification (Law: notify is a tool shape). In R1
     the notification is recorded against the incident; no real

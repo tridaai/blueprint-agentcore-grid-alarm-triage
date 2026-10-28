@@ -28,15 +28,18 @@ from grid_triage.models import (
     EtrOutcome,
     EvidenceItem,
     EvidencePack,
+    FieldUpdate,
     Incident,
     IncidentBrief,
     IncidentClosure,
     IncidentMembership,
+    IncidentRevision,
     IncidentStatus,
     MemoryRecord,
     Notification,
     SeverityAcknowledgement,
     SeverityAssessment,
+    TopologyDeclaration,
     WorkOrder,
     WorkOrderAssignment,
     WorkOrderDecision,
@@ -120,6 +123,17 @@ class Store(Protocol):
     def list_work_order_decisions(
         self, order_id: str | None = None
     ) -> list[WorkOrderDecision]: ...
+    # field updates, topology declarations, revisions (Round 6:
+    # insert-only artefacts and acts — no update, no delete)
+    def add_field_update(self, update: FieldUpdate) -> None: ...
+    def list_field_updates(self, incident_id: str) -> list[FieldUpdate]: ...
+    def add_topology_declaration(self, declaration: TopologyDeclaration) -> None: ...
+    def list_topology_declarations(
+        self, version: str | None = None
+    ) -> list[TopologyDeclaration]: ...
+    def add_incident_revision(self, revision: IncidentRevision) -> None: ...
+    def get_incident_revision(self, revision_id: str) -> IncidentRevision | None: ...
+    def list_incident_revisions(self) -> list[IncidentRevision]: ...
     # topology index
     def load_topology(self, payload: dict, loaded_at: datetime) -> None: ...
     def get_topology_payload(self, version: str) -> dict | None: ...
@@ -771,6 +785,93 @@ class SqlStore:
                 fetch="all",
             )
         return [WorkOrderDecision.model_validate(json.loads(r[0])) for r in rows]
+
+    # -- field updates, declarations, revisions (Round 6) ------------
+    def add_field_update(self, update: FieldUpdate) -> None:
+        row = self._run(
+            "SELECT COALESCE(MAX(act_seq), 0) FROM field_updates", fetch="one"
+        )
+        seq = int(row[0]) + 1
+        self._run(
+            "INSERT INTO field_updates (update_id, incident_id, kind, act_seq, payload)"
+            " VALUES (?,?,?,?,?)",
+            (update.update_id, update.incident_id, update.kind, seq, update.model_dump_json()),
+        )
+
+    def list_field_updates(self, incident_id: str) -> list[FieldUpdate]:
+        rows = self._run(
+            "SELECT payload FROM field_updates WHERE incident_id = ?"
+            " ORDER BY act_seq",
+            (incident_id,),
+            fetch="all",
+        )
+        return [FieldUpdate.model_validate(json.loads(r[0])) for r in rows]
+
+    def add_topology_declaration(self, declaration: TopologyDeclaration) -> None:
+        row = self._run(
+            "SELECT COALESCE(MAX(act_seq), 0) FROM topology_declarations",
+            fetch="one",
+        )
+        seq = int(row[0]) + 1
+        self._run(
+            "INSERT INTO topology_declarations (declaration_id, version, act_seq, payload)"
+            " VALUES (?,?,?,?)",
+            (
+                declaration.declaration_id,
+                declaration.version,
+                seq,
+                declaration.model_dump_json(),
+            ),
+        )
+
+    def list_topology_declarations(
+        self, version: str | None = None
+    ) -> list[TopologyDeclaration]:
+        if version is None:
+            rows = self._run(
+                "SELECT payload FROM topology_declarations ORDER BY act_seq",
+                fetch="all",
+            )
+        else:
+            rows = self._run(
+                "SELECT payload FROM topology_declarations WHERE version = ?"
+                " ORDER BY act_seq",
+                (version,),
+                fetch="all",
+            )
+        return [TopologyDeclaration.model_validate(json.loads(r[0])) for r in rows]
+
+    def add_incident_revision(self, revision: IncidentRevision) -> None:
+        row = self._run(
+            "SELECT COALESCE(MAX(act_seq), 0) FROM incident_revisions", fetch="one"
+        )
+        seq = int(row[0]) + 1
+        self._run(
+            "INSERT INTO incident_revisions"
+            " (revision_id, prior_incident_id, revised_incident_id, act_seq, payload)"
+            " VALUES (?,?,?,?,?)",
+            (
+                revision.revision_id,
+                revision.prior_incident_id,
+                revision.revised_incident_id,
+                seq,
+                revision.model_dump_json(),
+            ),
+        )
+
+    def get_incident_revision(self, revision_id: str) -> IncidentRevision | None:
+        row = self._run(
+            "SELECT payload FROM incident_revisions WHERE revision_id = ?",
+            (revision_id,),
+            fetch="one",
+        )
+        return IncidentRevision.model_validate(json.loads(row[0])) if row else None
+
+    def list_incident_revisions(self) -> list[IncidentRevision]:
+        rows = self._run(
+            "SELECT payload FROM incident_revisions ORDER BY act_seq", fetch="all"
+        )
+        return [IncidentRevision.model_validate(json.loads(r[0])) for r in rows]
 
     # -- topology index ------------------------------------------------
     def load_topology(self, payload: dict, loaded_at: datetime) -> None:
