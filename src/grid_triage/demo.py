@@ -5,8 +5,10 @@ alarm still visible. Lone trip → its own incident. Then the agent
 assembles the flood incident's brief, every statement cited —
 including the prior incidents retrieved from memory — the
 evidence pack is sealed and verified, the ETR is computed with
-its basis on the record, and the flood is closed so the accuracy
-ledger gains its first entry.
+its basis on the record, a work order is drafted, revised,
+assigned and approved through the operator gate (with the
+refusals the gate exists for), and the flood is closed so the
+accuracy ledger gains its first entry.
 """
 
 from __future__ import annotations
@@ -84,6 +86,73 @@ def run_demo(settings: Settings | None = None) -> Services:
         f"({estimate.inputs['crew_id']}), travel {components['travel_access']} min, "
         f"repair {components['base_repair']} min."
     )
+    from grid_triage.work_orders import WorkOrderRefusal
+
+    orders = svc.work_orders
+    drafted = orders.draft(flood.incident_id, T0 + timedelta(minutes=35))
+    print(
+        f"\nWork order {drafted.order_id} drafted by {drafted.drafted_by} "
+        f"(work pack {drafted.work_pack_version}): "
+        f"cause {drafted.cause_class}, qualification "
+        f"{drafted.required_qualification}, ETR pinned "
+        f"{drafted.estimate_id}, {len(drafted.affected_devices)} devices, "
+        f"safety notes for "
+        f"{[s['device_kind'] for s in drafted.safety_notes]}, gaps "
+        f"{drafted.gaps}. A draft authorises nothing."
+    )
+    try:
+        orders.assign(
+            drafted.order_id,
+            "CREW-NORTH-VEG",
+            "op.dana",
+            T0 + timedelta(minutes=30),
+            T0 + timedelta(minutes=250),
+            T0 + timedelta(minutes=36),
+        )
+        print("ERROR: an overlapping roster commitment was accepted")
+    except WorkOrderRefusal as exc:
+        print(f"Assignment over the crew's existing commitment refused: "
+              f"{exc.problems[0]}")
+    revised = orders.revise(
+        drafted.order_id,
+        "op.rivera",
+        T0 + timedelta(minutes=40),
+        operator_note="Chipper to be collected from the Alder depot gate.",
+    )
+    assignment = orders.assign(
+        revised.order_id,
+        "CREW-NORTH-VEG",
+        "op.dana",
+        T0 + timedelta(minutes=90),
+        T0 + timedelta(minutes=270),
+        T0 + timedelta(minutes=41),
+    )
+    print(
+        f"Version {revised.version} (revised by {revised.drafted_by}) "
+        f"assigned: {assignment.crew_id} "
+        f"{assignment.window_start.time()}–{assignment.window_end.time()} UTC."
+    )
+    try:
+        orders.decide(
+            revised.order_id, "approved", "op.rivera", "operator",
+            T0 + timedelta(minutes=42),
+        )
+        print("ERROR: self-approval was accepted")
+    except WorkOrderRefusal as exc:
+        print(f"Self-approval refused: {exc.problems[0]}")
+    decision, notifications = orders.decide(
+        revised.order_id, "approved", "op.dana", "operator",
+        T0 + timedelta(minutes=43),
+    )
+    print(
+        f"Work order approved by {decision.decided_by} "
+        f"({decision.role}) — the act pins version {revised.version} "
+        f"({revised.order_id}); {len(notifications)} notifications drafted, "
+        "none sent:"
+    )
+    for notification in notifications:
+        print(f"  [{notification.channel}] {notification.body}")
+
     hits = svc.memory.retrieve_for_incident(flood.incident_id, now)
     for hit in hits:
         print(
