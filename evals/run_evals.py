@@ -1,7 +1,7 @@
-"""Eval gate — Rounds 1–3 (grid alarm triage agent).
+"""Eval gate — Rounds 1–4 (grid alarm triage agent).
 
 Runs the planted streams through the real service graph on a
-throwaway SQLite store and grades the R1–R3 guarantees. Every
+throwaway SQLite store and grades the R1–R4 guarantees. Every
 counter is zero-tolerance unless marked otherwise:
 
   flood_incident_count_error     the 40-alarm flood must produce
@@ -64,6 +64,28 @@ counter is zero-tolerance unless marked otherwise:
   pack_member_tamper_undetected  tampering with a stored pack
                                  member, or with a member alarm's
                                  payload, must be caught by verify
+  etr_fixture_errors             the flood ETR at T+30min must
+                                 equal the hand-computed estimate:
+                                 wait 45 + travel 25 + repair 150
+                                 = 220, restored 06:23, duration 250
+  etr_revision_errors            re-estimating at T+120min must
+                                 supersede with delta -45 and the
+                                 changed input named (crew_wait)
+  etr_not_computable_errors      the lone trip (unknown cause)
+                                 must be not_computable naming
+                                 cause_class; synthetic probes must
+                                 name base_rate / travel_minutes
+  etr_brief_basis_missing        the flood's brief must carry its
+                                 ETR with the basis label attached
+  etr_basis_violations_accepted  a brief stating a bare restoration
+                                 time must be refused, never stored
+  closure_flow_errors            closing the flood must compare
+                                 its actual 270 against the
+                                 estimated 250; a second closure
+                                 must be refused
+  etr_accuracy_errors            the ledger after both closures
+                                 must read exactly: vegetation x1,
+                                 mean signed +20, unestimated 1
 
 Run: uv run python evals/run_evals.py  (exit 0 = GATE: PASS)
 """
@@ -82,11 +104,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from grid_triage.agent import (  # noqa: E402
     BandMismatchRefusal,
+    EtrBasisRefusal,
     IncidentAssembler,
     PriorAttributionRefusal,
 )
+from grid_triage.cause import classify_cause  # noqa: E402
+from grid_triage.closure import ClosureRefusal  # noqa: E402
 from grid_triage.config import Settings  # noqa: E402
-from grid_triage.models import BriefStatement, Citation, ToolShape  # noqa: E402
+from grid_triage.etr import ETR_PACK, compute_estimate  # noqa: E402
+from grid_triage.models import (  # noqa: E402
+    Alarm,
+    BriefStatement,
+    CauseClassification,
+    Citation,
+    Incident,
+    ToolShape,
+)
 from grid_triage.seed import (  # noqa: E402
     FLOOD_ALARM_IDS,
     NUISANCE_ALARM_IDS,
@@ -378,7 +411,210 @@ def main() -> int:
         undetected += 1
     counters["pack_member_tamper_undetected"] = undetected
 
-    print("Evals — grid alarm triage agent (Rounds 1-3)")
+    # ---- Round 4: ETR, graded against hand-computed truth ----
+    # Flood at T0+30min: vegetation crew committed until 03:28
+    # (wait 45) + SUB-ALDER -> SUB-ALDER travel 25 + base rate
+    # vegetation_contact|feeder_breaker 150 = 220; restored 06:23;
+    # duration from the 02:13 anchor = 250.
+    flood_etr = svc.etr.estimate(flood_incident.incident_id, T0 + timedelta(minutes=30))
+    etr_errors = 0
+    if flood_etr.status != "computed" or flood_etr.basis != "computed_from_rates":
+        etr_errors += 1
+    if {c["name"]: c["minutes"] for c in flood_etr.components} != {
+        "crew_wait": 45,
+        "travel_access": 25,
+        "base_repair": 150,
+    }:
+        etr_errors += 1
+    if flood_etr.total_minutes != 220:
+        etr_errors += 1
+    if flood_etr.estimated_restored_at != T0 + timedelta(minutes=250):
+        etr_errors += 1
+    if flood_etr.estimated_duration_minutes != 250.0:
+        etr_errors += 1
+    if flood_etr.inputs.get("crew_id") != "CREW-NORTH-VEG":
+        etr_errors += 1
+    if flood_etr.missing_inputs != []:
+        etr_errors += 1
+    counters["etr_fixture_errors"] = etr_errors
+
+    # Revision, as a pure computation: at T0+120 the crew is free,
+    # so only crew_wait changes (45 -> 0) and the total moves -45.
+    flood_anchor = svc.store.get_alarm(flood_incident.anchor_alarm_id)
+    flood_classification = classify_cause(
+        flood_incident, member_alarms, T0 + timedelta(minutes=30)
+    )
+    rev1 = compute_estimate(
+        flood_incident, flood_anchor, flood_classification,
+        svc.topology, svc.roster, T0 + timedelta(minutes=30),
+    )
+    rev2 = compute_estimate(
+        flood_incident, flood_anchor, flood_classification,
+        svc.topology, svc.roster, T0 + timedelta(minutes=120),
+        supersedes=rev1.estimate_id, prior=rev1,
+    )
+    counters["etr_revision_errors"] = (
+        0
+        if (
+            rev2.supersedes == rev1.estimate_id
+            and rev2.total_minutes == 175
+            and rev2.revision["total_minutes_delta"] == -45
+            and rev2.revision["estimated_restored_at_delta_minutes"] == 45.0
+            and rev2.revision["changed_inputs"] == ["crew_wait"]
+        )
+        else 1
+    )
+
+    # Not-computable probes: each missing input named, no time.
+    nc_errors = 0
+    lone_etr = svc.etr.estimate(
+        lone_incident.incident_id,
+        lone_alarms()[0].raised_at + timedelta(minutes=15),
+    )
+    if not (
+        lone_etr.status == "not_computable"
+        and lone_etr.missing_inputs == ["cause_class"]
+        and lone_etr.estimated_restored_at is None
+        and lone_etr.total_minutes is None
+    ):
+        nc_errors += 1
+
+    def _synthetic(anchor_device, feeder, substation):
+        incident = Incident(
+            incident_id="INC-SYNTH", feeder_id=feeder,
+            substation_id=substation, topology_version="v1",
+            correlation_pack_version="2026.10.1",
+            anchor_alarm_id="ALM-SYNTH",
+            created_at=T0,
+        )
+        anchor = Alarm(
+            alarm_id="ALM-SYNTH", stream_id="S", device_id=anchor_device,
+            feeder_id=feeder, kind="breaker_trip", severity="critical",
+            raised_at=T0, message="synthetic",
+        )
+        classification = CauseClassification(
+            classification_id="CAUSE-SYNTH", incident_id="INC-SYNTH",
+            pack_version="2026.10.1", cause_class="equipment_failure",
+            rule_id=None, inputs={}, classified_at=T0,
+        )
+        return incident, anchor, classification
+
+    probe = compute_estimate(
+        *_synthetic("SEN-1201", "FDR-12", "SUB-SOUTH"),
+        svc.topology, svc.roster, T0 + timedelta(hours=2),
+    )
+    if probe.missing_inputs != ["base_rate"]:
+        nc_errors += 1
+    no_travel = dict(ETR_PACK)
+    no_travel["travel_minutes"] = {"SUB-ALDER": {"SUB-ALDER": 25}}
+    probe = compute_estimate(
+        *_synthetic("REG-1202", "FDR-12", "SUB-SOUTH"),
+        svc.topology, svc.roster, T0 + timedelta(hours=2),
+        pack=no_travel,
+    )
+    if probe.missing_inputs != ["travel_minutes"]:
+        nc_errors += 1
+    counters["etr_not_computable_errors"] = nc_errors
+
+    # The brief assembled in the R1 loop carries its ETR with the
+    # basis label; a bare-time brief is refused outright.
+    flood_brief = svc.store.list_briefs(flood_incident.incident_id)[-1]
+    counters["etr_brief_basis_missing"] = (
+        0
+        if any(
+            s.text.startswith("Estimated restoration")
+            and "computed_from_rates" in s.text
+            for s in flood_brief.statements
+        )
+        else 1
+    )
+
+    class _BareTime:
+        profile = "offline"
+
+        def propose_brief(self, facts):
+            return [
+                BriefStatement(
+                    text="Restoration is expected by 2026-10-14T06:23:00+00:00.",
+                    citations=[
+                        Citation(evidence_item_id="EV-ALM-FLD-001", field="kind")
+                    ],
+                )
+            ]
+
+    try:
+        IncidentAssembler(
+            svc.store, svc.chain, _BareTime(),
+            cause=svc.cause, memory=svc.memory, etr=svc.etr,
+        ).assemble(flood_incident.incident_id, T0 + timedelta(minutes=30))
+        counters["etr_basis_violations_accepted"] = 1
+    except EtrBasisRefusal:
+        counters["etr_basis_violations_accepted"] = 0
+
+    # Closure: the flood restored at 06:43 — actual 270 against
+    # the estimated 250 of record; the lone trip was never
+    # computably estimated, and the ledger must show both facts.
+    closure_errors = 0
+    _closure, outcome, _record = svc.closure.close_incident(
+        flood_incident.incident_id,
+        "op.dana",
+        "operator",
+        T0 + timedelta(minutes=270),
+        "Vegetation crew cleared the tree contact at REC-071; Feeder 7 restored.",
+        T0 + timedelta(minutes=300),
+    )
+    if not (
+        outcome.status == "compared"
+        and outcome.estimate_id == flood_etr.estimate_id
+        and outcome.estimated_duration_minutes == 250.0
+        and outcome.actual_duration_minutes == 270.0
+        and outcome.signed_error_minutes == 20.0
+    ):
+        closure_errors += 1
+    try:
+        svc.closure.close_incident(
+            flood_incident.incident_id,
+            "op.dana",
+            "operator",
+            T0 + timedelta(minutes=270),
+            "Closed twice.",
+            T0 + timedelta(minutes=300),
+        )
+        closure_errors += 1  # a second closure was accepted
+    except ClosureRefusal:
+        pass
+    counters["closure_flow_errors"] = closure_errors
+
+    svc.closure.close_incident(
+        lone_incident.incident_id,
+        "op.dana",
+        "operator",
+        lone_alarms()[0].raised_at + timedelta(minutes=60),
+        "Breaker reclosed after inspection; no fault found.",
+        lone_alarms()[0].raised_at + timedelta(minutes=75),
+    )
+    ledger = svc.closure.accuracy_ledger()
+    counters["etr_accuracy_errors"] = (
+        0
+        if (
+            ledger["by_cause_class"]
+            == [
+                {
+                    "cause_class": "vegetation_contact",
+                    "compared_count": 1,
+                    "mean_signed_error_minutes": 20.0,
+                    "mean_absolute_error_minutes": 20.0,
+                    "max_absolute_error_minutes": 20.0,
+                }
+            ]
+            and ledger["overall"]["compared_count"] == 1
+            and ledger["overall"]["mean_absolute_error_minutes"] == 20.0
+            and ledger["unestimated_closures"] == 1
+        )
+        else 1
+    )
+
+    print("Evals — grid alarm triage agent (Rounds 1-4)")
     for name, value in counters.items():
         print(f"  {name}: {value} (required 0)")
     failed = [n for n, v in counters.items() if v != 0]
