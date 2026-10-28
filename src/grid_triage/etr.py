@@ -85,6 +85,18 @@ COMPUTED = "computed"
 NOT_COMPUTABLE = "not_computable"
 
 
+class EtrRefusal(RuntimeError):
+    """An estimate the record does not allow (Round 10: a
+    recomputation whose as_of precedes the standing head's —
+    history is insertion-ordered, so appending it would rewind
+    the current estimate and poison the closure's choice of the
+    estimate of record)."""
+
+    def __init__(self, problems: list[str]):
+        self.problems = problems
+        super().__init__("; ".join(problems))
+
+
 def _estimate_id(body: dict) -> str:
     digest = hashlib.sha256(canonical_json(body)).hexdigest()
     return f"ETR-{digest[:16]}"
@@ -401,6 +413,15 @@ class EtrService:
         existing = self.store.get_etr_estimate(candidate.estimate_id)
         if existing is not None:
             return existing
+        if prior is not None and candidate.as_of < prior.as_of:
+            raise EtrRefusal(
+                [
+                    f"estimate at {candidate.as_of.isoformat()} precedes "
+                    f"the current estimate's as_of "
+                    f"({prior.as_of.isoformat()}) — a recomputation "
+                    "supersedes the head going forward, never rewinds it"
+                ]
+            )
         self.store.add_etr_estimate(candidate)
         self.chain.append(
             incident_id,

@@ -91,6 +91,7 @@ from grid_triage.agent import (
     PriorAttributionRefusal,
 )
 from grid_triage.closure import ClosureRefusal
+from grid_triage.etr import EtrRefusal
 from grid_triage.handover import HandoverRefusal
 from grid_triage.models import Alarm
 from grid_triage.packs import PackRefusal
@@ -153,6 +154,12 @@ def handle_invocation(payload: dict, session_id: str | None = None) -> dict:
             assessment = svc.severity.assess(incident_id, as_of)
         except KeyError:
             return {"status": "no_such_incident", "incident_id": incident_id}
+        except SeverityRefusal as exc:
+            return {
+                "status": "refused",
+                "incident_id": incident_id,
+                "problems": exc.problems,
+            }
         return {
             "status": "assessed",
             "incident_id": incident_id,
@@ -303,6 +310,12 @@ def handle_invocation(payload: dict, session_id: str | None = None) -> dict:
             estimate = svc.etr.estimate(incident_id, as_of)
         except KeyError:
             return {"status": "no_such_incident", "incident_id": incident_id}
+        except EtrRefusal as exc:
+            return {
+                "status": "refused",
+                "incident_id": incident_id,
+                "problems": exc.problems,
+            }
         return {
             "status": "estimated",
             "incident_id": incident_id,

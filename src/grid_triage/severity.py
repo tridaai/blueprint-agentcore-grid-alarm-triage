@@ -298,6 +298,22 @@ class SeverityService:
         existing = self.store.get_severity_assessment(candidate.assessment_id)
         if existing is not None:
             return existing  # already recorded (e.g. re-assessment at an older as_of)
+        if prior is not None and candidate.as_of < prior.as_of:
+            # Round 10 red team: history is insertion-ordered, so
+            # appending a computation whose as_of precedes the
+            # head's would make a stale band the current one on
+            # every surface that reads the head — severity deflated
+            # after the fact by re-running the clock backwards.
+            # A recomputation supersedes going forward, or it is
+            # the identical artefact already on record above.
+            raise SeverityRefusal(
+                [
+                    f"assessment at {candidate.as_of.isoformat()} precedes "
+                    f"the current assessment's as_of "
+                    f"({prior.as_of.isoformat()}) — a recomputation "
+                    "supersedes the head going forward, never rewinds it"
+                ]
+            )
         self.store.add_severity_assessment(candidate)
         self.chain.append(
             incident_id,

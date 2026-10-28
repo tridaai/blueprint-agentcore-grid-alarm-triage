@@ -31,6 +31,7 @@ from grid_triage.agent import (
     PriorAttributionRefusal,
 )
 from grid_triage.closure import ClosureRefusal
+from grid_triage.etr import EtrRefusal
 from grid_triage.handover import HandoverRefusal
 from grid_triage.models import Alarm
 from grid_triage.packs import PackRefusal
@@ -318,7 +319,10 @@ def assess_severity(incident_id: str, request: AssessRequest | None = None) -> d
     if s.store.get_incident(incident_id) is None:
         raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
     as_of = (request.as_of if request else None) or datetime.now(timezone.utc)
-    assessment = s.severity.assess(incident_id, as_of)
+    try:
+        assessment = s.severity.assess(incident_id, as_of)
+    except SeverityRefusal as exc:
+        raise HTTPException(status_code=422, detail={"problems": exc.problems}) from exc
     return assessment.model_dump(mode="json")
 
 
@@ -381,7 +385,10 @@ def estimate_etr(incident_id: str, request: EstimateRequest | None = None) -> di
     if s.store.get_incident(incident_id) is None:
         raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
     as_of = (request.as_of if request else None) or datetime.now(timezone.utc)
-    estimate = s.etr.estimate(incident_id, as_of)
+    try:
+        estimate = s.etr.estimate(incident_id, as_of)
+    except EtrRefusal as exc:
+        raise HTTPException(status_code=422, detail={"problems": exc.problems}) from exc
     return estimate.model_dump(mode="json")
 
 

@@ -11,6 +11,7 @@ import json
 from datetime import datetime, timezone
 
 from grid_triage.closure import ClosureRefusal
+from grid_triage.etr import EtrRefusal
 from grid_triage.handover import HandoverRefusal
 from grid_triage.models import Alarm
 from grid_triage.packs import PackRefusal
@@ -248,6 +249,9 @@ def main(argv: list[str] | None = None) -> int:
         except KeyError:
             print(f"no such incident: {args.incident_id}")
             return 1
+        except SeverityRefusal as exc:
+            print("refused: " + "; ".join(exc.problems))
+            return 1
         print(json.dumps(assessment.model_dump(mode="json"), indent=2))
     elif args.command == "ack-queue":
         print(json.dumps(
@@ -369,6 +373,9 @@ def main(argv: list[str] | None = None) -> int:
             estimate = svc.etr.estimate(args.incident_id, as_of)
         except KeyError:
             print(f"no such incident: {args.incident_id}")
+            return 1
+        except EtrRefusal as exc:
+            print("refused: " + "; ".join(exc.problems))
             return 1
         print(json.dumps(estimate.model_dump(mode="json"), indent=2))
     elif args.command == "close":
