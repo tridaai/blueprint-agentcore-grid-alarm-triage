@@ -187,6 +187,57 @@ incident's rows and artefacts are never written by any of this;
 supersession lives on the link record. An incident with a
 closure anywhere in its lineage is refused, naming the closure.
 
+**Restoration is confirmed from signals; the close is a gate
+(R7).** Round 4's closure act records the facts of a close, but
+nothing in Rounds 1–6 *earned* one. Round 7 adds the earning
+(`grid_triage/restoration.py`). A **restoration signal** is an
+insert-only reading recorded against an incident: per-device
+readings from the meter/OMS-shaped sources (`restored` /
+`still_out`) and a feeder supply reading from the
+topology-shaped layer (`supplied` / `not_supplied`). The
+**confirmation** is computed in code from the signals, the
+incident's field updates and its pinned topology, under a
+versioned restoration pack: each required evidence class —
+meter restoration, feeder supply reading, crew confirmation
+(a field-crew note on the incident) — is named present or
+absent with the artefact ids behind the verdict; restored and
+outstanding customers are summed per device over the outage
+set (the severity slice, anchor plus descendants). A device's
+state is its latest signal's state, so a late `still_out`
+reading makes a confirmation stale-honest rather than wrong.
+The artefact reads `complete` only when every class is present
+and no device is outstanding; otherwise `partial`, and a
+partial confirmation cannot close anything. The **gated close**
+is a named operator's insert-only act binding the complete
+confirmation by id, the R4 closure and its ETR outcome by id
+(the accuracy ledger's entry — linked, never duplicated), and
+the work-order position: the current order's completion act
+(new in R7 — approvals decided state, but nothing recorded
+that the field work was *done*) or an explicit waiver by the
+closer with a reason. Open items refuse the close, named. A
+**partial restoration splits**: a named act divides the
+incident into a restored part and a continuing incident —
+new rows, memberships partitioned by the confirmation's device
+sets, the partition and customer counts stated on the split
+record — following the R6 revision pattern exactly, including
+the rule that the source is never edited. A split part inherits
+the source's signals and crew updates through the split link,
+so the restored part confirms against its own partition of the
+outage set and closes on its own evidence. A **closed incident
+is never reopened**: an alarm update arriving on a closed
+incident's device set never joins it — the update service
+checks for a closure before correlating, and the restoration
+service's registered handler records a
+`post_close_contradiction` and opens a fresh incident holding
+the alarm, linked back to the closed one; the contradiction is
+readable from both incidents. The **event log** assembles one
+incident's whole chain from artefacts of record only, in
+timestamp order, each line carrying its artefact id (JSON plus
+a plain-text rendering), and its verifier re-performs an
+export against the store — a line that names no artefact, or
+the wrong timestamp, and an artefact missing from the export
+are both named as problems.
+
 ## Stores
 
 One store port, two dialects (`grid_triage/store.py`): SQLite

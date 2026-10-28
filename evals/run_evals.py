@@ -1,4 +1,4 @@
-"""Eval gate — Rounds 1–6 (grid alarm triage agent).
+"""Eval gate — Rounds 1–7 (grid alarm triage agent).
 
 Runs the planted streams through the real service graph on a
 throwaway SQLite store and grades the R1–R5 guarantees. Every
@@ -142,6 +142,38 @@ counter is zero-tolerance unless marked otherwise:
                                  with score 58 — the annex hospital
                                  load's +30 critical points on the
                                  hand-computed v1 figure of 28
+  close_without_confirmation_accepted
+                                 a gated close with no restoration
+                                 confirmation computed must be
+                                 refused — an accepted close counts
+  partial_evidence_closed_whole  the partially restored section
+                                 incident (760 of 1440 customers)
+                                 must confirm partial and refuse a
+                                 whole close, leaving no closure
+  close_with_open_work_orders_accepted
+                                 a gated close over an open current
+                                 work order must be refused naming
+                                 the order
+  split_flow_errors              the split must partition the
+                                 section incident's alarms exactly
+                                 (north section restored / SEC-073
+                                 branch continuing), the restored
+                                 part must close on inherited
+                                 evidence, and the continuing
+                                 incident and the split source must
+                                 stay open
+  closed_incident_mutated        a post-close alarm on REC-071
+                                 must record a contradiction and a
+                                 fresh incident while the closed
+                                 flood's row and memberships stay
+                                 byte-identical
+  event_log_lines_not_reperforming
+                                 every line of the flood's event
+                                 log must re-perform against the
+                                 store (verifier problems count)
+  event_log_tamper_undetected    an export with one line's
+                                 timestamp rewritten must be caught
+                                 by the verifier
 
 Run: uv run python evals/run_evals.py  (exit 0 = GATE: PASS)
 """
@@ -1053,7 +1085,242 @@ def main() -> int:
         0 if (lone_v2.band == "SEV-2" and lone_v2.score == 58) else 1
     )
 
-    print("Evals — grid alarm triage agent (Rounds 1-6)")
+    # ---- Round 7: restoration, the gated close, splits, -------
+    # ---- contradictions and the event log ----------------------
+    from grid_triage.restoration import RestorationRefusal
+
+    r7_base = datetime(2026, 10, 15, 8, 0, tzinfo=timezone.utc)
+    svc.intake.ingest(
+        [
+            Alarm(alarm_id="ALM-SPL-001", stream_id="STREAM-SCADA-NORTH",
+                  device_id="BRK-070", feeder_id="FDR-07",
+                  kind="breaker_trip", severity="critical",
+                  raised_at=r7_base, message="Feeder 7 breaker tripped"),
+            Alarm(alarm_id="ALM-SPL-002", stream_id="STREAM-SCADA-NORTH",
+                  device_id="SEC-072", feeder_id="FDR-07",
+                  kind="phase_loss", severity="major",
+                  raised_at=r7_base + timedelta(seconds=40),
+                  message="Phase loss reported by SEC-072"),
+            Alarm(alarm_id="ALM-SPL-003", stream_id="STREAM-SCADA-NORTH",
+                  device_id="SEC-073", feeder_id="FDR-07",
+                  kind="voltage_sag", severity="major",
+                  raised_at=r7_base + timedelta(seconds=70),
+                  message="Voltage sag reported by SEC-073"),
+            Alarm(alarm_id="ALM-SPL-004", stream_id="STREAM-SCADA-NORTH",
+                  device_id="XF-0731", feeder_id="FDR-07",
+                  kind="transformer_temp_high", severity="major",
+                  raised_at=r7_base + timedelta(seconds=100),
+                  message="Transformer T31 temperature high"),
+        ]
+    )
+    spl_created = svc.correlator.correlate_new(svc.topology)
+    spl = next(
+        i for i in spl_created if i.anchor_alarm_id == "ALM-SPL-001"
+    )
+
+    # No confirmation computed: the gated close must refuse.
+    try:
+        svc.restoration.close_incident(
+            spl.incident_id, "op.dana", "operator",
+            r7_base + timedelta(minutes=60), "Done.",
+            recorded_at=r7_base + timedelta(minutes=60),
+        )
+        counters["close_without_confirmation_accepted"] = 1
+    except RestorationRefusal:
+        counters["close_without_confirmation_accepted"] = 0
+
+    svc.updates.post_update(
+        spl.incident_id, "crew_note", "crew.lee", "field_crew",
+        r7_base + timedelta(minutes=25),
+        note="North section back on; the SEC-073 branch is still out.",
+    )
+    for device_id in ("BRK-070", "REC-071", "SEC-072", "SEN-0722", "XF-0721"):
+        svc.restoration.record_signal(
+            spl.incident_id, "meter", "disp.ray", "dispatcher",
+            r7_base + timedelta(minutes=26), "restored",
+            device_id=device_id,
+        )
+    partial = svc.restoration.confirm(spl.incident_id, r7_base + timedelta(minutes=27))
+    partial_closed = 0
+    if not (
+        partial.status == "partial"
+        and partial.restored_customers == 760
+        and partial.outstanding_customers == 680
+    ):
+        partial_closed += 1
+    try:
+        svc.restoration.close_incident(
+            spl.incident_id, "op.dana", "operator",
+            r7_base + timedelta(minutes=60), "Done.",
+            recorded_at=r7_base + timedelta(minutes=60),
+        )
+        partial_closed += 1  # a partial confirmation closed it whole
+    except RestorationRefusal:
+        pass
+    if svc.store.get_incident_closure(spl.incident_id) is not None:
+        partial_closed += 1
+    counters["partial_evidence_closed_whole"] = partial_closed
+
+    split = svc.restoration.split_incident(
+        spl.incident_id, "op.dana", "operator", r7_base + timedelta(minutes=30)
+    )
+    split_errors = 0
+    if {m.alarm_id for m in svc.store.list_memberships(split.restored_incident_id)} != {
+        "ALM-SPL-001", "ALM-SPL-002"
+    }:
+        split_errors += 1
+    if {m.alarm_id for m in svc.store.list_memberships(split.continuing_incident_id)} != {
+        "ALM-SPL-003", "ALM-SPL-004"
+    }:
+        split_errors += 1
+
+    # The work-order gate, on a fresh Feeder 3 incident whose
+    # restoration confirms complete (BRK-030 0 + XF-0311 210).
+    wo_base = datetime(2026, 10, 15, 12, 0, tzinfo=timezone.utc)
+    svc.intake.ingest(
+        [
+            Alarm(alarm_id="ALM-WO-001", stream_id="STREAM-SCADA-NORTH",
+                  device_id="BRK-030", feeder_id="FDR-03",
+                  kind="breaker_trip", severity="critical",
+                  raised_at=wo_base, message="Feeder 3 breaker tripped"),
+            Alarm(alarm_id="ALM-WO-002", stream_id="STREAM-SCADA-NORTH",
+                  device_id="XF-0311", feeder_id="FDR-03",
+                  kind="transformer_temp_high", severity="major",
+                  raised_at=wo_base + timedelta(seconds=45),
+                  message="Transformer T11 temperature high"),
+        ]
+    )
+    wo_created = svc.correlator.correlate_new(svc.topology)
+    wo_incident = next(
+        i for i in wo_created if i.anchor_alarm_id == "ALM-WO-001"
+    )
+    svc.updates.post_update(
+        wo_incident.incident_id, "crew_note", "crew.lee", "field_crew",
+        wo_base + timedelta(minutes=20), note="Transformer replaced and tested.",
+    )
+    for device_id in ("BRK-030", "XF-0311"):
+        svc.restoration.record_signal(
+            wo_incident.incident_id, "meter", "disp.ray", "dispatcher",
+            wo_base + timedelta(minutes=25), "restored", device_id=device_id,
+        )
+    svc.restoration.record_signal(
+        wo_incident.incident_id, "topology", "disp.ray", "dispatcher",
+        wo_base + timedelta(minutes=25), "supplied", feeder_id="FDR-03",
+    )
+    wo_conf = svc.restoration.confirm(
+        wo_incident.incident_id, wo_base + timedelta(minutes=26)
+    )
+    if wo_conf.status != "complete" or wo_conf.total_customers != 210:
+        split_errors += 1
+    wo_order = svc.work_orders.draft(
+        wo_incident.incident_id, wo_base + timedelta(minutes=27)
+    )
+    open_accepted = 0
+    try:
+        svc.restoration.close_incident(
+            wo_incident.incident_id, "op.dana", "operator",
+            wo_base + timedelta(minutes=90), "Done.",
+            recorded_at=wo_base + timedelta(minutes=95),
+        )
+        open_accepted = 1  # closed over an open work order
+    except RestorationRefusal as exc:
+        if not any(wo_order.order_id in p for p in exc.problems):
+            open_accepted = 1  # refused, but not naming the order
+    counters["close_with_open_work_orders_accepted"] = open_accepted
+    wo_act, _c, _o, _r = svc.restoration.close_incident(
+        wo_incident.incident_id, "op.dana", "operator",
+        wo_base + timedelta(minutes=90),
+        "Transformer replaced; feeder restored.",
+        waivers={wo_order.order_id: "Inspection folded into the next patrol."},
+        recorded_at=wo_base + timedelta(minutes=95),
+    )
+    if wo_act.waived_orders != [
+        {"order_id": wo_order.order_id, "reason": "Inspection folded into the next patrol."}
+    ]:
+        split_errors += 1
+
+    # The restored part closes on its own (inherited) evidence;
+    # the continuing incident and the split source stay open.
+    svc.restoration.record_signal(
+        split.restored_incident_id, "topology", "disp.ray", "dispatcher",
+        r7_base + timedelta(minutes=35), "supplied", feeder_id="FDR-07",
+    )
+    part_conf = svc.restoration.confirm(
+        split.restored_incident_id, r7_base + timedelta(minutes=36)
+    )
+    if not (part_conf.status == "complete" and part_conf.total_customers == 760):
+        split_errors += 1
+    svc.restoration.close_incident(
+        split.restored_incident_id, "op.dana", "operator",
+        r7_base + timedelta(minutes=40), "North section restored.",
+        recorded_at=r7_base + timedelta(minutes=41),
+    )
+    if svc.store.get_incident_closure(split.restored_incident_id) is None:
+        split_errors += 1
+    if svc.store.get_incident_closure(split.continuing_incident_id) is not None:
+        split_errors += 1
+    if svc.store.get_incident_closure(spl.incident_id) is not None:
+        split_errors += 1
+    counters["split_flow_errors"] = split_errors
+
+    # A post-close alarm on the flood's device set contradicts
+    # the restoration: the closed incident must not change at all.
+    flood_before = svc.store.get_incident(
+        flood_incident.incident_id
+    ).model_dump(mode="json")
+    members_before = {
+        m.alarm_id
+        for m in svc.store.list_memberships(flood_incident.incident_id)
+    }
+    contra_update = svc.updates.post_update(
+        flood_incident.incident_id, "alarm_observation", "disp.ray",
+        "dispatcher", T0 + timedelta(days=2),
+        alarm=Alarm(
+            alarm_id="ALM-POST-001", stream_id="STREAM-SCADA-NORTH",
+            device_id="REC-071", feeder_id="FDR-07",
+            kind="recloser_lockout", severity="critical",
+            raised_at=T0 + timedelta(days=2),
+            message="Recloser R1 locked out again after restoration",
+        ),
+    )
+    mutated = 0
+    if contra_update.correlation.get("status") != "post_close_contradiction":
+        mutated += 1
+    fresh_id = contra_update.correlation.get("fresh_incident_id")
+    if fresh_id != "INC-ALM-POST-001" or svc.store.get_incident(fresh_id) is None:
+        mutated += 1
+    if svc.store.get_incident(flood_incident.incident_id).model_dump(
+        mode="json"
+    ) != flood_before:
+        mutated += 1
+    if {
+        m.alarm_id
+        for m in svc.store.list_memberships(flood_incident.incident_id)
+    } != members_before:
+        mutated += 1
+    if len(svc.restoration.contradictions_for(flood_incident.incident_id)) != 1:
+        mutated += 1
+    if len(svc.restoration.contradictions_for(fresh_id)) != 1:
+        mutated += 1
+    counters["closed_incident_mutated"] = mutated
+
+    # The flood's event log re-performs line for line; a tampered
+    # export is caught.
+    flood_log = svc.event_log.build_log(flood_incident.incident_id)
+    counters["event_log_lines_not_reperforming"] = len(
+        svc.event_log.verify_log(flood_incident.incident_id, flood_log)
+    )
+    tampered_lines = [dict(line) for line in flood_log["lines"]]
+    tampered_lines[2]["at"] = "1999-01-01T00:00:00+00:00"
+    counters["event_log_tamper_undetected"] = (
+        0
+        if svc.event_log.verify_log(
+            flood_incident.incident_id, {"lines": tampered_lines}
+        )
+        else 1
+    )
+
+    print("Evals — grid alarm triage agent (Rounds 1-7)")
     for name, value in counters.items():
         print(f"  {name}: {value} (required 0)")
     failed = [n for n, v in counters.items() if v != 0]

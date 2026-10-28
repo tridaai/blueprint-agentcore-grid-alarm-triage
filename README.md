@@ -262,6 +262,69 @@ programme.
   walks the flood through a field update, the v2 declaration,
   and its re-correlation diff.
 
+## What Round 7 builds
+
+- **Restoration is confirmed from signals, in code**
+  (`grid_triage/restoration.py`): restoration signals are
+  readings recorded against an incident — per-device readings
+  from the meter/OMS-shaped sources, a feeder supply reading
+  from the topology-shaped layer. The **confirmation** is a
+  computed artefact under a versioned restoration pack: every
+  required evidence class (meter restoration, feeder supply
+  reading, crew confirmation from the incident's field updates)
+  is named present or absent with the artefact ids behind the
+  verdict, and restored vs outstanding customers are summed
+  device by device over the incident's outage set. It reads
+  `complete` only when every class is present and every device
+  is restored; anything less reads `partial`. A device's current
+  state is its latest signal's state — a later `still_out`
+  reading supersedes an earlier `restored` one by record, never
+  by edit.
+- **The gated close**: an incident closes only through a named
+  operator's close act binding (a) a complete confirmation,
+  (b) the Round 4 closure and its ETR-vs-actual outcome — the
+  accuracy-ledger entry, linked by id and never duplicated —
+  and (c) the work-order position: the current work order's
+  **completion act** (new in this round — an approved order
+  finally has a "completed" fact) recorded, or the order
+  explicitly waived by the closer with a reason. Closing with
+  open items is refused with the items named. The close is an
+  insert-only act; the incident row is never mutated. The R4
+  minimal closure remains for the recorded facts — the gate is
+  what earns it.
+- **Partial restoration is split, never closed whole**: when
+  part of an incident's customer set is restored, a named act
+  divides it into a restored part and a continuing incident
+  following the Round 6 revision pattern — new incident rows,
+  memberships partitioned by the confirmation's device sets,
+  the partition and its customer counts stated on the split
+  record, the source untouched. A split part inherits the
+  source's signals and crew updates through the split link, so
+  the restored part can be confirmed and closed on its own
+  evidence while the rest stays open.
+- **Post-close contradictions**: a closed incident is never
+  reopened and never re-correlated. A post-close alarm on a
+  closed incident's device set is recorded as a
+  `post_close_contradiction` and opens a fresh incident linked
+  back to the closed one; the contradiction is visible on both
+  incidents' reads, and the closed incident's record does not
+  change by a byte.
+- **The incident event log**: a regulatory-style export of one
+  incident's whole chain — alarms, correlation, severity and
+  ETR history, work orders and their acts, field updates,
+  restoration, close — assembled only from artefacts of record
+  in timestamp order, each line carrying its artefact id, as
+  JSON with a plain-text rendering. An independent verifier
+  re-performs the export against the store; the eval gate
+  counts non-re-performing lines and probes a tampered export.
+- Migration 0007 (both dialects), two new read tools in the
+  Law 1 registry, and surfaces at parity across the operations
+  API, the Runtime invocation handler and the CLI. The demo
+  now walks the flood to a confirmed gated close with its
+  accuracy record linked, splits a partially restored
+  next-morning incident, closes the restored part, and raises
+  a post-close contradiction on the closed flood.
+
 ## Quick start
 
 ```bash
@@ -297,15 +360,23 @@ What is built and what is not, plainly:
   operator's approval act — role-checked, never the drafter of
   a human-touched version — moves a version to approved, and
   the notifications it produces are drafts, never sent.
-  Restoration confirmation is the next round, storm mode the
-  one after. Nothing here dispatches a crew in the world; it
-  records who decided what.
+  Nothing here dispatches a crew in the world; it records who
+  decided what.
 - **Field updates and re-correlation are Round 6**: updates
   are recorded against incidents and correlated under the
   pinned topology only; topology v2 is declared effective by
   a named act, and re-correlation produces a linked revision
   with a stated diff — the prior revision is never edited,
   and closed incidents are never re-correlated.
+- **Restoration confirmation and the gated close are
+  Round 7**: restoration is confirmed from recorded signals
+  by a computed artefact, and an incident closes only through
+  a named close act binding a complete confirmation, the R4
+  closure and its ETR outcome, and the work-order position.
+  Signals arrive through a recording port with planted local
+  readings — no live meter/OMS system is connected, and a
+  confirmation is only ever as good as the signals recorded
+  against it. Storm mode remains a later round.
 - **The AgentCore Policy pack is Round 11.** In R1, Law 1 (no
   control) is enforced by the tool catalogue's construction and
   the registry scan; the Cedar policy pack at the Gateway is the
@@ -331,12 +402,13 @@ src/grid_triage/   models, topology, correlation, services (ingest),
                    evidence, store, agent, tools (Law 1 registry),
                    severity (R2), cause / memory / packs (R3),
                    roster / etr / closure (R4), work_orders (R5),
+                   revisions (R6), restoration (R7),
                    runtime_app / runtime_main (AgentCore Runtime),
                    api, demo, cli, local_invoke, wiring, config
 data/topology/     versioned territory data (v1.json, v2.json)
 data/roster/       versioned crew roster artefact (v1.json)
 migrations/        numbered SQL migrations, sqlite + postgres trees
-tests/             pytest suite (140 tests through R6)
+tests/             pytest suite (161 tests through R7)
 evals/             the eval gate (run_evals.py)
 docs/              architecture.md — the honest AgentCore mapping
 ```
