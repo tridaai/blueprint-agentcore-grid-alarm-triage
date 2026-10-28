@@ -35,6 +35,10 @@ def apply_migrations(conn, dialect: str) -> list[str]:
         "CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY)"
     )
     applied = {row[0] for row in conn.execute("SELECT name FROM schema_migrations")}
+    # The store's query layer translates placeholders per dialect;
+    # this runner writes through the caller's raw connection, so
+    # the ledger insert names its dialect's placeholder itself.
+    placeholder = "%s" if dialect == "postgres" else "?"
     done: list[str] = []
     for path in migration_files(dialect):
         if path.name in applied:
@@ -44,7 +48,10 @@ def apply_migrations(conn, dialect: str) -> list[str]:
             statement = statement.strip()
             if statement:
                 conn.execute(statement)
-        conn.execute("INSERT INTO schema_migrations (name) VALUES (?)", (path.name,))
+        conn.execute(
+            f"INSERT INTO schema_migrations (name) VALUES ({placeholder})",
+            (path.name,),
+        )
         done.append(path.name)
     conn.commit()
     return done
