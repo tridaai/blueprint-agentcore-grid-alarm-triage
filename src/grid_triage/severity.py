@@ -248,10 +248,20 @@ class SeverityService:
             pack=self.pack,
             supersedes=prior.assessment_id if prior else None,
         )
-        if prior is not None and prior.assessment_id == candidate.assessment_id:
-            return prior  # identical recomputation: a no-op, not a new link
-        if self.store.get_severity_assessment(candidate.assessment_id) is not None:
-            return candidate  # already recorded (e.g. re-assessment at an older as_of)
+        if prior is not None:
+            # Identical recomputation against the same head: a
+            # no-op, not a new link. The comparison ignores the
+            # identity fields — the candidate's ``supersedes``
+            # points at the prior by construction, so the content
+            # hash can never match the prior's own.
+            link_free = {"assessment_id", "supersedes"}
+            if candidate.model_dump(exclude=link_free) == prior.model_dump(
+                exclude=link_free
+            ):
+                return prior
+        existing = self.store.get_severity_assessment(candidate.assessment_id)
+        if existing is not None:
+            return existing  # already recorded (e.g. re-assessment at an older as_of)
         self.store.add_severity_assessment(candidate)
         self.chain.append(
             incident_id,
