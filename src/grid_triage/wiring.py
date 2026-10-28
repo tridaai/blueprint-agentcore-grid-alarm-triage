@@ -18,6 +18,7 @@ from grid_triage.evidence import EvidenceChain
 from grid_triage.memory import LocalMemoryDouble, MemoryService
 from grid_triage.object_store import LocalObjectStore
 from grid_triage.packs import EvidencePackService
+from grid_triage.revisions import FieldUpdateService, RevisionService, TopologyService
 from grid_triage.roster import RosterView, load_roster_file
 from grid_triage.seed import ReferenceFeedAdapter
 from grid_triage.services import CorrelationService, IngestService
@@ -64,6 +65,18 @@ class Services:
             self.store, self.chain, self.cause, self.etr, self.roster
         )
         self.closure = ClosureService(self.store, self.chain, self.memory)
+        # Round 6: field updates, the topology declaration act,
+        # and re-correlation under a declared version.
+        self.updates = FieldUpdateService(self.store, self.chain)
+        self.topology_acts = TopologyService(self.store)
+        self.revisions = RevisionService(
+            self.store,
+            self.chain,
+            self.cause,
+            self.severity,
+            self.etr,
+            self.topology_acts,
+        )
         self.assembler = IncidentAssembler(
             self.store,
             self.chain,
