@@ -37,6 +37,9 @@ from grid_triage.models import (
     Notification,
     SeverityAcknowledgement,
     SeverityAssessment,
+    WorkOrder,
+    WorkOrderAssignment,
+    WorkOrderDecision,
 )
 
 
@@ -102,6 +105,21 @@ class Store(Protocol):
     def list_etr_outcomes(
         self, incident_id: str | None = None
     ) -> list[EtrOutcome]: ...
+    # work orders (Round 5: drafts are insert-only versions; the
+    # assignment and decision acts are their own records — the port
+    # exposes no update or delete for any of them)
+    def add_work_order(self, order: WorkOrder) -> None: ...
+    def get_work_order(self, order_id: str) -> WorkOrder | None: ...
+    def list_work_orders(self, incident_id: str) -> list[WorkOrder]: ...
+    def list_all_work_orders(self) -> list[WorkOrder]: ...
+    def add_work_order_assignment(self, assignment: WorkOrderAssignment) -> None: ...
+    def list_work_order_assignments(
+        self, order_id: str | None = None
+    ) -> list[WorkOrderAssignment]: ...
+    def add_work_order_decision(self, decision: WorkOrderDecision) -> None: ...
+    def list_work_order_decisions(
+        self, order_id: str | None = None
+    ) -> list[WorkOrderDecision]: ...
     # topology index
     def load_topology(self, payload: dict, loaded_at: datetime) -> None: ...
     def get_topology_payload(self, version: str) -> dict | None: ...
@@ -642,6 +660,117 @@ class SqlStore:
                 fetch="all",
             )
         return [EtrOutcome.model_validate(json.loads(r[0])) for r in rows]
+
+    # -- work orders (Round 5) ---------------------------------------
+    def add_work_order(self, order: WorkOrder) -> None:
+        row = self._run(
+            "SELECT COALESCE(MAX(drafted_seq), 0) FROM work_orders", fetch="one"
+        )
+        seq = int(row[0]) + 1
+        self._run(
+            "INSERT INTO work_orders (order_id, incident_id, version, drafted_seq, payload)"
+            " VALUES (?,?,?,?,?)",
+            (
+                order.order_id,
+                order.incident_id,
+                order.version,
+                seq,
+                order.model_dump_json(),
+            ),
+        )
+
+    def get_work_order(self, order_id: str) -> WorkOrder | None:
+        row = self._run(
+            "SELECT payload FROM work_orders WHERE order_id = ?",
+            (order_id,),
+            fetch="one",
+        )
+        return WorkOrder.model_validate(json.loads(row[0])) if row else None
+
+    def list_work_orders(self, incident_id: str) -> list[WorkOrder]:
+        rows = self._run(
+            "SELECT payload FROM work_orders WHERE incident_id = ?"
+            " ORDER BY drafted_seq",
+            (incident_id,),
+            fetch="all",
+        )
+        return [WorkOrder.model_validate(json.loads(r[0])) for r in rows]
+
+    def list_all_work_orders(self) -> list[WorkOrder]:
+        rows = self._run(
+            "SELECT payload FROM work_orders ORDER BY drafted_seq", fetch="all"
+        )
+        return [WorkOrder.model_validate(json.loads(r[0])) for r in rows]
+
+    def add_work_order_assignment(self, assignment: WorkOrderAssignment) -> None:
+        row = self._run(
+            "SELECT COALESCE(MAX(act_seq), 0) FROM work_order_assignments",
+            fetch="one",
+        )
+        seq = int(row[0]) + 1
+        self._run(
+            "INSERT INTO work_order_assignments"
+            " (assignment_id, order_id, crew_id, act_seq, payload)"
+            " VALUES (?,?,?,?,?)",
+            (
+                assignment.assignment_id,
+                assignment.order_id,
+                assignment.crew_id,
+                seq,
+                assignment.model_dump_json(),
+            ),
+        )
+
+    def list_work_order_assignments(
+        self, order_id: str | None = None
+    ) -> list[WorkOrderAssignment]:
+        if order_id is None:
+            rows = self._run(
+                "SELECT payload FROM work_order_assignments ORDER BY act_seq",
+                fetch="all",
+            )
+        else:
+            rows = self._run(
+                "SELECT payload FROM work_order_assignments WHERE order_id = ?"
+                " ORDER BY act_seq",
+                (order_id,),
+                fetch="all",
+            )
+        return [WorkOrderAssignment.model_validate(json.loads(r[0])) for r in rows]
+
+    def add_work_order_decision(self, decision: WorkOrderDecision) -> None:
+        row = self._run(
+            "SELECT COALESCE(MAX(act_seq), 0) FROM work_order_decisions",
+            fetch="one",
+        )
+        seq = int(row[0]) + 1
+        self._run(
+            "INSERT INTO work_order_decisions (decision_id, order_id, act_seq, payload)"
+            " VALUES (?,?,?,?)",
+            (
+                decision.decision_id,
+                decision.order_id,
+                seq,
+                decision.model_dump_json(),
+            ),
+        )
+
+    def list_work_order_decisions(
+        self, order_id: str | None = None
+    ) -> list[WorkOrderDecision]:
+        if order_id is None:
+            rows = self._run(
+                "SELECT payload FROM work_order_decisions ORDER BY act_seq",
+                fetch="all",
+            )
+        else:
+            rows = self._run(
+                "SELECT payload FROM work_order_decisions WHERE order_id = ?"
+                " ORDER BY act_seq",
+                (order_id,),
+                fetch="all",
+            )
+        return [WorkOrderDecision.model_validate(json.loads(r[0])) for r in rows]
 
     # -- topology index ------------------------------------------------
     def load_topology(self, payload: dict, loaded_at: datetime) -> None:

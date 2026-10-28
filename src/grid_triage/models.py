@@ -282,6 +282,83 @@ class EtrOutcome(BaseModel):
     recorded_at: datetime
 
 
+class WorkOrder(BaseModel):
+    """One work-order draft version for one incident (Round 5,
+    Law 5).
+
+    A draft authorises nothing: it states the work the incident
+    calls for — scope derived in code from the classification of
+    record and the affected devices on the pinned topology,
+    safety notes and materials from the versioned work pack, the
+    crew qualification the roster's vocabulary names, and the R4
+    ETR estimate pinned by id. Content-addressed like the
+    severity assessments: the same derived inputs name the same
+    draft, drafts are never edited, and a change is a new
+    ``version`` whose ``supersedes`` links to the version it
+    replaces. ``drafted_by`` is ``"system"`` for the assembler's
+    draft or the name of the operator who revised it — the
+    approval gate's self-approval rule reads it. What the data
+    cannot supply (an unclassified cause states no honest crew
+    qualification) is named in ``gaps``, never filled in.
+    """
+
+    order_id: str
+    incident_id: str
+    version: int
+    supersedes: str | None = None
+    drafted_by: str
+    drafted_at: datetime
+    work_pack_version: str
+    classification_id: str | None = None
+    cause_class: str
+    estimate_id: str | None = None
+    scope_of_work: list[str] = Field(default_factory=list)
+    affected_devices: list[dict] = Field(default_factory=list)
+    safety_notes: list[dict] = Field(default_factory=list)
+    required_qualification: str | None = None
+    materials: list[dict] = Field(default_factory=list)
+    operator_note: str | None = None
+    gaps: list[str] = Field(default_factory=list)
+
+
+class WorkOrderAssignment(BaseModel):
+    """A named operator's assignment of one crew to one work-order
+    version (Round 5). A recorded act, not an edit: the draft it
+    names stays byte-identical. Qualification and double-booking
+    are checked in code at assignment time; ``supersedes`` links
+    to the assignment on the same order this one replaces, so the
+    current assignment is always the latest act."""
+
+    assignment_id: str
+    order_id: str
+    incident_id: str
+    crew_id: str
+    assigned_by: str
+    assigned_at: datetime
+    window_start: datetime
+    window_end: datetime
+    supersedes: str | None = None
+
+
+class WorkOrderDecision(BaseModel):
+    """A named operator's approval or rejection of one exact
+    work-order version (Round 5, Law 5). The act pins the
+    ``order_id`` it decided: approval of a version is not approval
+    of its successors. An approval also drafts the work order's
+    notifications — their ids are recorded here, and the
+    notifications themselves are drafts, never sent."""
+
+    decision_id: str
+    order_id: str
+    incident_id: str
+    decision: str  # "approved" | "rejected"
+    decided_by: str
+    role: str
+    reason: str | None = None
+    decided_at: datetime
+    notification_ids: list[str] = Field(default_factory=list)
+
+
 class Notification(BaseModel):
     """A recorded notification (Law: notify is a tool shape). In R1
     the notification is recorded against the incident; no real
