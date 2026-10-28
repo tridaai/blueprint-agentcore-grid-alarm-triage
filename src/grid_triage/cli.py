@@ -11,7 +11,9 @@ import json
 from datetime import datetime, timezone
 
 from grid_triage.closure import ClosureRefusal
+from grid_triage.models import Alarm
 from grid_triage.packs import PackRefusal
+from grid_triage.revisions import RevisionRefusal, TopologyRefusal, UpdateRefusal
 from grid_triage.severity import SeverityRefusal
 from grid_triage.wiring import build_services
 from grid_triage.work_orders import WorkOrderRefusal
@@ -94,6 +96,32 @@ def main(argv: list[str] | None = None) -> int:
     p_reject.add_argument("--by", required=True, help="the rejecting operator's name")
     p_reject.add_argument("--role", required=True, help="the rejecting operator's role")
     p_reject.add_argument("--reason", required=True, help="why the draft is rejected")
+    sub.add_parser("topology-versions")
+    p_decl = sub.add_parser("declare-topology")
+    p_decl.add_argument("--version", default="v2", help="the topology version to declare")
+    p_decl.add_argument("--by", required=True, help="the declaring operator's name")
+    p_decl.add_argument("--role", required=True, help="the declaring operator's role")
+    p_decl.add_argument("--effective-at", required=True, help="ISO timestamp the version takes effect")
+    p_decl.add_argument("--declared-at", default=None, help="ISO timestamp; default: now")
+    p_upd = sub.add_parser("field-update")
+    p_upd.add_argument("incident_id")
+    p_upd.add_argument("--kind", required=True, help="alarm_observation | crew_note | damage_finding")
+    p_upd.add_argument("--by", required=True, help="the reporter's name")
+    p_upd.add_argument("--role", required=True, help="the reporter's role")
+    p_upd.add_argument("--note", default=None)
+    p_upd.add_argument("--device", default=None)
+    p_upd.add_argument("--finding", default=None)
+    p_upd.add_argument("--alarm-json", default=None, help="the carried alarm, as a JSON object")
+    p_upd.add_argument("--reported-at", default=None, help="ISO timestamp; default: now")
+    p_updates = sub.add_parser("updates")
+    p_updates.add_argument("incident_id")
+    p_recorr = sub.add_parser("recorrelate")
+    p_recorr.add_argument("incident_id")
+    p_recorr.add_argument("--by", required=True, help="the re-correlating operator's name")
+    p_recorr.add_argument("--role", required=True, help="the re-correlating operator's role")
+    p_recorr.add_argument("--as-of", default=None, help="ISO timestamp; default: now")
+    p_revisions = sub.add_parser("revisions")
+    p_revisions.add_argument("incident_id")
     args = parser.parse_args(argv)
 
     svc = build_services()
@@ -374,6 +402,95 @@ def main(argv: list[str] | None = None) -> int:
             "decision": act.model_dump(mode="json"),
             "notifications": [n.model_dump(mode="json") for n in notifications],
         }, indent=2))
+    elif args.command == "topology-versions":
+        print(json.dumps({
+            "versions": svc.store.list_topology_versions(),
+            "declarations": [
+                d.model_dump(mode="json") for d in svc.topology_acts.declarations()
+            ],
+        }, indent=2))
+    elif args.command == "declare-topology":
+        declared_at = (
+            datetime.fromisoformat(args.declared_at)
+            if args.declared_at
+            else datetime.now(timezone.utc)
+        )
+        try:
+            declaration = svc.topology_acts.declare(
+                args.version,
+                args.by,
+                args.role,
+                declared_at,
+                datetime.fromisoformat(args.effective_at),
+            )
+        except TopologyRefusal as exc:
+            print("refused: " + "; ".join(exc.problems))
+            return 1
+        print(json.dumps(declaration.model_dump(mode="json"), indent=2))
+    elif args.command == "field-update":
+        reported_at = (
+            datetime.fromisoformat(args.reported_at)
+            if args.reported_at
+            else datetime.now(timezone.utc)
+        )
+        alarm = (
+            Alarm.model_validate(json.loads(args.alarm_json))
+            if args.alarm_json
+            else None
+        )
+        try:
+            update = svc.updates.post_update(
+                args.incident_id,
+                args.kind,
+                args.by,
+                args.role,
+                reported_at,
+                note=args.note,
+                device_id=args.device,
+                finding=args.finding,
+                alarm=alarm,
+            )
+        except KeyError:
+            print(f"no such incident: {args.incident_id}")
+            return 1
+        except UpdateRefusal as exc:
+            print("refused: " + "; ".join(exc.problems))
+            return 1
+        print(json.dumps(update.model_dump(mode="json"), indent=2))
+    elif args.command == "updates":
+        if svc.store.get_incident(args.incident_id) is None:
+            print(f"no such incident: {args.incident_id}")
+            return 1
+        print(json.dumps(
+            [u.model_dump(mode="json") for u in svc.updates.list_updates(args.incident_id)],
+            indent=2,
+        ))
+    elif args.command == "recorrelate":
+        as_of = (
+            datetime.fromisoformat(args.as_of)
+            if args.as_of
+            else datetime.now(timezone.utc)
+        )
+        try:
+            revision = svc.revisions.recorrelate(
+                args.incident_id, args.by, args.role, as_of
+            )
+        except KeyError:
+            print(f"no such incident: {args.incident_id}")
+            return 1
+        except RevisionRefusal as exc:
+            print("refused: " + "; ".join(exc.problems))
+            return 1
+        print(json.dumps(revision.model_dump(mode="json"), indent=2))
+    elif args.command == "revisions":
+        try:
+            chain = svc.revisions.chain(args.incident_id)
+        except KeyError:
+            print(f"no such incident: {args.incident_id}")
+            return 1
+        print(json.dumps(
+            [r.model_dump(mode="json") for r in chain], indent=2
+        ))
     return 0
 
 

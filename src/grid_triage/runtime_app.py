@@ -37,6 +37,14 @@ payload names one piece of triage work:
   (draft shape), their reads, and the recorded operator acts:
   crew assignment and the approval gate. No action here operates
   anything — approval drafts notifications, it never sends.
+- ``{"action": "post_field_update" | "get_field_updates" |
+  "declare_topology" | "get_topology_versions" |
+  "recorrelate_incident" | "get_incident_revisions", ...}`` —
+  the Round 6 field updates (recorded against an incident,
+  alarm observations correlated under its pinned topology),
+  the topology declaration act, and re-correlation under a
+  declared version. Declaring and re-correlating are recorded
+  operator acts over data — neither operates anything.
 
 The Runtime session id (``context.session_id``) maps to one
 triage session and is carried into the logs. All domain work
@@ -60,6 +68,7 @@ from grid_triage.agent import (
 from grid_triage.closure import ClosureRefusal
 from grid_triage.models import Alarm
 from grid_triage.packs import PackRefusal
+from grid_triage.revisions import RevisionRefusal, TopologyRefusal, UpdateRefusal
 from grid_triage.services import DuplicateAlarm
 from grid_triage.severity import SeverityRefusal
 from grid_triage.wiring import Services, build_services
@@ -443,6 +452,103 @@ def handle_invocation(payload: dict, session_id: str | None = None) -> dict:
             "status": decision,
             "decision": act.model_dump(mode="json"),
             "notifications": [n.model_dump(mode="json") for n in notifications],
+        }
+    if action == "post_field_update":
+        incident_id = payload["incident_id"]
+        reported_at = now
+        if payload.get("reported_at"):
+            reported_at = datetime.fromisoformat(payload["reported_at"])
+        alarm = None
+        if payload.get("alarm"):
+            alarm = Alarm.model_validate(payload["alarm"])
+        try:
+            update = svc.updates.post_update(
+                incident_id,
+                payload.get("kind", ""),
+                payload.get("reported_by", ""),
+                payload.get("role", ""),
+                reported_at,
+                note=payload.get("note"),
+                device_id=payload.get("device_id"),
+                finding=payload.get("finding"),
+                alarm=alarm,
+            )
+        except KeyError:
+            return {"status": "no_such_incident", "incident_id": incident_id}
+        except UpdateRefusal as exc:
+            return {
+                "status": "refused",
+                "incident_id": incident_id,
+                "problems": exc.problems,
+            }
+        return {"status": "recorded", "update": update.model_dump(mode="json")}
+    if action == "get_field_updates":
+        incident_id = payload["incident_id"]
+        if svc.store.get_incident(incident_id) is None:
+            return {"status": "no_such_incident", "incident_id": incident_id}
+        return {
+            "status": "ok",
+            "incident_id": incident_id,
+            "updates": [
+                u.model_dump(mode="json")
+                for u in svc.updates.list_updates(incident_id)
+            ],
+        }
+    if action == "declare_topology":
+        declared_at = now
+        if payload.get("declared_at"):
+            declared_at = datetime.fromisoformat(payload["declared_at"])
+        try:
+            declaration = svc.topology_acts.declare(
+                payload.get("version", "v2"),
+                payload.get("declared_by", ""),
+                payload.get("role", ""),
+                declared_at,
+                datetime.fromisoformat(payload["effective_at"]),
+            )
+        except TopologyRefusal as exc:
+            return {"status": "refused", "problems": exc.problems}
+        return {"status": "declared", "declaration": declaration.model_dump(mode="json")}
+    if action == "get_topology_versions":
+        return {
+            "status": "ok",
+            "versions": svc.store.list_topology_versions(),
+            "declarations": [
+                d.model_dump(mode="json")
+                for d in svc.topology_acts.declarations()
+            ],
+        }
+    if action == "recorrelate_incident":
+        incident_id = payload["incident_id"]
+        as_of = now
+        if payload.get("as_of"):
+            as_of = datetime.fromisoformat(payload["as_of"])
+        try:
+            revision = svc.revisions.recorrelate(
+                incident_id,
+                payload.get("recorrelated_by", ""),
+                payload.get("role", ""),
+                as_of,
+            )
+        except KeyError:
+            return {"status": "no_such_incident", "incident_id": incident_id}
+        except RevisionRefusal as exc:
+            return {
+                "status": "refused",
+                "incident_id": incident_id,
+                "problems": exc.problems,
+            }
+        return {"status": "recorrelated", "revision": revision.model_dump(mode="json")}
+    if action == "get_incident_revisions":
+        incident_id = payload["incident_id"]
+        try:
+            chain = svc.revisions.chain(incident_id)
+        except KeyError:
+            return {"status": "no_such_incident", "incident_id": incident_id}
+        return {
+            "status": "ok",
+            "incident_id": incident_id,
+            "revisions": [r.model_dump(mode="json") for r in chain],
         }
     if action == "ingest_and_brief":
         alarms = [Alarm.model_validate(a) for a in payload.get("alarms", [])]

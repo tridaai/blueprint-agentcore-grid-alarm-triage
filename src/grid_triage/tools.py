@@ -68,6 +68,21 @@ TOOL_REGISTRY: list[ToolSpec] = [
         description="List work-order versions and their derived states, optionally filtered by state (Round 5).",
     ),
     ToolSpec(
+        name="get_topology_versions",
+        shape=ToolShape.READ,
+        description="List the topology versions the store holds and the declaration acts recorded for them (Round 6).",
+    ),
+    ToolSpec(
+        name="get_field_updates",
+        shape=ToolShape.READ,
+        description="Read an incident's field updates — crew notes, damage findings, alarm observations with their pinned-topology correlation outcomes (Round 6).",
+    ),
+    ToolSpec(
+        name="get_incident_revisions",
+        shape=ToolShape.READ,
+        description="Read an incident's revision chain: the re-correlation records linking it to its revisions under newer topology versions, with their diffs (Round 6).",
+    ),
+    ToolSpec(
         name="assemble_incident_brief",
         shape=ToolShape.DRAFT,
         description="Draft the incident brief from correlated alarms, every statement cited.",

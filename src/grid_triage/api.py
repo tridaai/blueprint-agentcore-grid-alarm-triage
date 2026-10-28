@@ -31,6 +31,7 @@ from grid_triage.agent import (
 from grid_triage.closure import ClosureRefusal
 from grid_triage.models import Alarm
 from grid_triage.packs import PackRefusal
+from grid_triage.revisions import RevisionRefusal, TopologyRefusal, UpdateRefusal
 from grid_triage.services import DuplicateAlarm
 from grid_triage.severity import SeverityRefusal
 from grid_triage.topology import TopologyView
@@ -607,6 +608,130 @@ def verify_chain(incident_id: str) -> dict:
     if s.store.get_incident(incident_id) is None:
         raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
     return {"incident_id": incident_id, "chain_valid": s.chain.verify_chain(incident_id)}
+
+
+# -- Round 6: field updates, topology declarations, revisions --------
+
+
+class FieldUpdateRequest(BaseModel):
+    kind: str
+    reported_by: str
+    role: str
+    reported_at: datetime | None = None
+    note: str | None = None
+    device_id: str | None = None
+    finding: str | None = None
+    alarm: Alarm | None = None
+
+
+@app.post("/incidents/{incident_id}/updates")
+def post_field_update(incident_id: str, request: FieldUpdateRequest) -> dict:
+    s = svc()
+    try:
+        update = s.updates.post_update(
+            incident_id,
+            request.kind,
+            request.reported_by,
+            request.role,
+            request.reported_at or datetime.now(timezone.utc),
+            note=request.note,
+            device_id=request.device_id,
+            finding=request.finding,
+            alarm=request.alarm,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except UpdateRefusal as exc:
+        raise HTTPException(status_code=422, detail={"problems": exc.problems}) from exc
+    return update.model_dump(mode="json")
+
+
+@app.get("/incidents/{incident_id}/updates")
+def list_field_updates(incident_id: str) -> dict:
+    s = svc()
+    if s.store.get_incident(incident_id) is None:
+        raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
+    return {
+        "incident_id": incident_id,
+        "updates": [u.model_dump(mode="json") for u in s.updates.list_updates(incident_id)],
+    }
+
+
+class DeclareTopologyRequest(BaseModel):
+    version: str = "v2"
+    declared_by: str
+    role: str
+    declared_at: datetime | None = None
+    effective_at: datetime
+
+
+@app.post("/topology/declare")
+def declare_topology(request: DeclareTopologyRequest) -> dict:
+    s = svc()
+    try:
+        declaration = s.topology_acts.declare(
+            request.version,
+            request.declared_by,
+            request.role,
+            request.declared_at or datetime.now(timezone.utc),
+            request.effective_at,
+        )
+    except TopologyRefusal as exc:
+        raise HTTPException(status_code=422, detail={"problems": exc.problems}) from exc
+    return declaration.model_dump(mode="json")
+
+
+@app.get("/topology/declarations")
+def list_topology_declarations() -> dict:
+    return {
+        "declarations": [
+            d.model_dump(mode="json") for d in svc().topology_acts.declarations()
+        ]
+    }
+
+
+class RecorrelateRequest(BaseModel):
+    recorrelated_by: str
+    role: str
+    as_of: datetime | None = None
+
+
+@app.post("/incidents/{incident_id}/recorrelate")
+def recorrelate_incident(incident_id: str, request: RecorrelateRequest) -> dict:
+    s = svc()
+    try:
+        revision = s.revisions.recorrelate(
+            incident_id,
+            request.recorrelated_by,
+            request.role,
+            request.as_of or datetime.now(timezone.utc),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RevisionRefusal as exc:
+        raise HTTPException(status_code=422, detail={"problems": exc.problems}) from exc
+    return revision.model_dump(mode="json")
+
+
+@app.get("/incidents/{incident_id}/revisions")
+def list_incident_revisions(incident_id: str) -> dict:
+    s = svc()
+    try:
+        chain = s.revisions.chain(incident_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {
+        "incident_id": incident_id,
+        "revisions": [r.model_dump(mode="json") for r in chain],
+    }
+
+
+@app.get("/revisions/{revision_id}")
+def get_revision(revision_id: str) -> dict:
+    revision = svc().store.get_incident_revision(revision_id)
+    if revision is None:
+        raise HTTPException(status_code=404, detail=f"no such revision: {revision_id}")
+    return revision.model_dump(mode="json")
 
 
 @app.get("/topology/versions")
