@@ -15,6 +15,7 @@ from grid_triage.closure import ClosureRefusal
 from grid_triage.etr import EtrRefusal
 from grid_triage.handover import HandoverRefusal
 from grid_triage.models import Alarm
+from grid_triage.oversight import OversightRefusal
 from grid_triage.packs import PackRefusal
 from grid_triage.restoration import RestorationRefusal
 from grid_triage.revisions import RevisionRefusal, TopologyRefusal, UpdateRefusal
@@ -214,6 +215,18 @@ def main(argv: list[str] | None = None) -> int:
     p_hoa.add_argument("--by", required=True, help="the incoming operator accepting")
     p_hoa.add_argument("--role", required=True, help="the accepting operator's role")
     p_hoa.add_argument("--at", default=None, help="ISO timestamp; default: now")
+    # Round 12: operations oversight reporting.
+    p_ov = sub.add_parser("oversight-report")
+    p_ov.add_argument("--by", required=True, help="the operator generating the report")
+    p_ov.add_argument("--role", required=True, help="the generating operator's role")
+    p_ov.add_argument("--from", dest="window_from", required=True,
+                      help="window start, ISO timestamp (inclusive)")
+    p_ov.add_argument("--to", dest="window_to", required=True,
+                      help="window end, ISO timestamp (exclusive)")
+    p_ov.add_argument("--at", default=None, help="ISO timestamp; default: now")
+    sub.add_parser("oversight-reports")
+    p_ovv = sub.add_parser("oversight-verify")
+    p_ovv.add_argument("report_id")
     # Round 11: the access layer's own reads. The CLI is the
     # trusted local path — it carries no principal; these two
     # views exist so the room can inspect the rules and the
@@ -890,6 +903,40 @@ def main(argv: list[str] | None = None) -> int:
             print("refused: " + "; ".join(exc.problems))
             return 1
         print(json.dumps(acceptance.model_dump(mode="json"), indent=2))
+    elif args.command == "oversight-report":
+        generated_at = (
+            datetime.fromisoformat(args.at)
+            if args.at
+            else datetime.now(timezone.utc)
+        )
+        try:
+            report = svc.oversight.generate(
+                args.by,
+                args.role,
+                datetime.fromisoformat(args.window_from),
+                datetime.fromisoformat(args.window_to),
+                generated_at,
+            )
+        except OversightRefusal as exc:
+            print("refused: " + "; ".join(exc.problems))
+            return 1
+        print(json.dumps(svc.oversight.view(report), indent=2))
+    elif args.command == "oversight-reports":
+        print(json.dumps(
+            [svc.oversight.view(r) for r in svc.oversight.reports()],
+            indent=2,
+        ))
+    elif args.command == "oversight-verify":
+        try:
+            problems = svc.oversight.verify_report(args.report_id)
+        except KeyError:
+            print(f"no such oversight report: {args.report_id}")
+            return 1
+        print(json.dumps(
+            {"report_id": args.report_id, "problems": problems}, indent=2
+        ))
+        if problems:
+            return 1
     elif args.command == "access-pack":
         print(json.dumps({
             "pack": svc.access.pack.model_dump(mode="json"),

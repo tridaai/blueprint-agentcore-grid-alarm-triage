@@ -658,6 +658,42 @@ def run_demo(settings: Settings | None = None) -> Services:
             "recorded refusals, readable by the auditor and the "
             "duty manager."
         )
+
+    # Round 12: the oversight report — the demo's three days
+    # frozen into the window artefact management reads later.
+    # Every figure re-performs through the verifier's second
+    # path; the auditor reads the report but generates none.
+    report = svc.oversight.generate(
+        "op.dana",
+        "operator",
+        datetime(2026, 10, 14, tzinfo=timezone.utc),
+        datetime(2026, 10, 17, tzinfo=timezone.utc),
+        datetime(2026, 10, 17, 9, 0, tzinfo=timezone.utc),
+    )
+    report_problems = svc.oversight.verify_report(report.report_id)
+    volumes = report.sections["incident_volumes"]
+    print(
+        f"Oversight report {report.report_id} for Oct 14–17: "
+        f"{volumes['total']} incidents founded, states "
+        f"{volumes['by_state']}, closure rate "
+        f"{volumes['closure_rate']}; verifier problems: "
+        f"{report_problems}."
+    )
+    try:
+        svc.oversight.generate(
+            "qa.ives",
+            "operator",
+            datetime(2026, 10, 14, tzinfo=timezone.utc),
+            datetime(2026, 10, 17, tzinfo=timezone.utc),
+            datetime(2026, 10, 17, 9, 5, tzinfo=timezone.utc),
+            principal=auditor,
+        )
+        print("ERROR: an auditor generated a report")
+    except AccessDeniedError as exc:
+        print(
+            f"Oversight: auditor generation refused ({exc.reason}) "
+            "— the auditor reads reports; it does not generate them."
+        )
     return svc
 
 

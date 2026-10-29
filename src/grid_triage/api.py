@@ -43,6 +43,7 @@ from grid_triage.access import (
     SURFACE_FIELD_UPDATES,
     SURFACE_INCIDENT,
     SURFACE_MEMORY,
+    SURFACE_OVERSIGHT,
     SURFACE_PACKS,
     SURFACE_RESTORATION,
     SURFACE_SEVERITY,
@@ -63,6 +64,7 @@ from grid_triage.closure import ClosureRefusal
 from grid_triage.etr import EtrRefusal
 from grid_triage.handover import HandoverRefusal
 from grid_triage.models import Alarm
+from grid_triage.oversight import OversightRefusal
 from grid_triage.packs import PackRefusal
 from grid_triage.restoration import RestorationRefusal
 from grid_triage.revisions import RevisionRefusal, TopologyRefusal, UpdateRefusal
@@ -1690,6 +1692,85 @@ def accept_handover(
             status_code=422, detail={"problems": exc.problems}
         ) from exc
     return acceptance.model_dump(mode="json")
+
+
+# -- Round 12: operations oversight reporting --------------------
+
+
+class GenerateReportRequest(BaseModel):
+    generated_by: str
+    role: str
+    window_start: datetime
+    window_end: datetime
+    generated_at: datetime | None = None
+
+
+@app.post("/oversight/reports")
+def generate_report(
+    request: GenerateReportRequest, http_request: Request
+) -> dict:
+    """The generation act. A carried principal is judged by the
+    access pack (the generate_report act, the named human, the
+    role) before the service's own pack discipline runs."""
+    s = svc()
+    principal = _principal(http_request, surface=SURFACE_OVERSIGHT)
+    try:
+        report = s.oversight.generate(
+            request.generated_by,
+            request.role,
+            request.window_start,
+            request.window_end,
+            request.generated_at or datetime.now(timezone.utc),
+            principal=principal,
+        )
+    except AccessDeniedError as exc:
+        raise _forbidden(exc) from exc
+    except OversightRefusal as exc:
+        raise HTTPException(
+            status_code=422, detail={"problems": exc.problems}
+        ) from exc
+    return s.oversight.view(report)
+
+
+@app.get("/oversight/reports")
+def list_reports(request: Request) -> dict:
+    if not _list_visible(request, SURFACE_OVERSIGHT):
+        return {"reports": []}
+    s = svc()
+    return {"reports": [s.oversight.view(r) for r in s.oversight.reports()]}
+
+
+@app.get("/oversight/reports/{report_id}")
+def get_report(report_id: str, request: Request) -> dict:
+    _guard_surface(
+        request,
+        SURFACE_OVERSIGHT,
+        not_found_detail=f"no such oversight report: {report_id}",
+        target=report_id,
+    )
+    s = svc()
+    report = s.oversight.get(report_id)
+    if report is None:
+        raise HTTPException(
+            status_code=404, detail=f"no such oversight report: {report_id}"
+        )
+    return s.oversight.view(report)
+
+
+@app.get("/oversight/reports/{report_id}/verify")
+def verify_report(report_id: str, request: Request) -> dict:
+    _guard_surface(
+        request,
+        SURFACE_OVERSIGHT,
+        not_found_detail=f"no such oversight report: {report_id}",
+        target=report_id,
+    )
+    s = svc()
+    try:
+        problems = s.oversight.verify_report(report_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"report_id": report_id, "problems": problems}
 
 
 @app.get("/topology/versions")

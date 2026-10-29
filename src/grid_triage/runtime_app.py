@@ -70,6 +70,14 @@ payload names one piece of triage work:
   from artefacts of record; acceptance is the incoming
   operator's act bound to its record hash, refused when the
   record has moved. Neither operates anything.
+- ``{"action": "generate_oversight_report" |
+  "get_oversight_report" | "list_oversight_reports" |
+  "verify_oversight_report", ...}`` — the Round 12 operations
+  oversight reporting: generation freezes a stated window's
+  aggregate figures into an insert-only artefact; the verifier
+  re-performs every figure by an independent path. Aggregate
+  only — a report names no incident — and generation is a
+  named act judged by the access pack like every act here.
 - Round 11: any payload may carry ``"principal": {"id": ...,
   "role": ...}``. A carried principal is authenticated before
   anything runs and judged by the access pack on every action:
@@ -103,6 +111,7 @@ from grid_triage.access import (
     SURFACE_FIELD_UPDATES,
     SURFACE_INCIDENT,
     SURFACE_MEMORY,
+    SURFACE_OVERSIGHT,
     SURFACE_PACKS,
     SURFACE_RESTORATION,
     SURFACE_SEVERITY,
@@ -123,6 +132,7 @@ from grid_triage.closure import ClosureRefusal
 from grid_triage.etr import EtrRefusal
 from grid_triage.handover import HandoverRefusal
 from grid_triage.models import Alarm
+from grid_triage.oversight import OversightRefusal
 from grid_triage.packs import PackRefusal
 from grid_triage.restoration import RestorationRefusal
 from grid_triage.revisions import RevisionRefusal, TopologyRefusal, UpdateRefusal
@@ -1180,6 +1190,75 @@ def handle_invocation(payload: dict, session_id: str | None = None) -> dict:
         return {
             "status": "accepted",
             "acceptance": acceptance.model_dump(mode="json"),
+        }
+    if action == "generate_oversight_report":
+        generated_at = now
+        if payload.get("generated_at"):
+            generated_at = datetime.fromisoformat(payload["generated_at"])
+        try:
+            report = svc.oversight.generate(
+                payload.get("generated_by", ""),
+                payload.get("role", ""),
+                datetime.fromisoformat(payload.get("window_start", "")),
+                datetime.fromisoformat(payload.get("window_end", "")),
+                generated_at,
+                principal=principal,
+            )
+        except AccessDeniedError as exc:
+            return denied_body(exc)
+        except OversightRefusal as exc:
+            return {"status": "refused", "problems": exc.problems}
+        except ValueError:
+            return {
+                "status": "refused",
+                "problems": [
+                    "window_start and window_end must be ISO timestamps"
+                ],
+            }
+        return {
+            "status": "generated",
+            "report": svc.oversight.view(report),
+        }
+    if action == "get_oversight_report":
+        if resource_hidden(SURFACE_OVERSIGHT, payload.get("report_id", "")):
+            return {
+                "status": "no_such_report",
+                "report_id": payload.get("report_id"),
+            }
+        report = svc.oversight.get(payload.get("report_id", ""))
+        if report is None:
+            return {
+                "status": "no_such_report",
+                "report_id": payload.get("report_id"),
+            }
+        return {"status": "ok", "report": svc.oversight.view(report)}
+    if action == "list_oversight_reports":
+        reports = (
+            svc.oversight.reports() if list_visible(SURFACE_OVERSIGHT) else []
+        )
+        return {
+            "status": "ok",
+            "reports": [svc.oversight.view(r) for r in reports],
+        }
+    if action == "verify_oversight_report":
+        if resource_hidden(SURFACE_OVERSIGHT, payload.get("report_id", "")):
+            return {
+                "status": "no_such_report",
+                "report_id": payload.get("report_id"),
+            }
+        try:
+            problems = svc.oversight.verify_report(
+                payload.get("report_id", "")
+            )
+        except KeyError:
+            return {
+                "status": "no_such_report",
+                "report_id": payload.get("report_id"),
+            }
+        return {
+            "status": "ok",
+            "report_id": payload.get("report_id"),
+            "problems": problems,
         }
     if action == "ingest_and_brief":
         alarms = [Alarm.model_validate(a) for a in payload.get("alarms", [])]
