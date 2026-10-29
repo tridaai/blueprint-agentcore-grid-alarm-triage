@@ -20,6 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 
+from grid_triage.access import AccessDenial
 from grid_triage.migrations import apply_migrations
 from grid_triage.models import (
     Alarm,
@@ -185,6 +186,11 @@ class Store(Protocol):
     def list_storm_declarations(self) -> list[StormDeclaration]: ...
     def add_storm_review(self, review: StormReview) -> None: ...
     def get_storm_review(self, review_id: str) -> StormReview | None: ...
+    # Access denials (Round 11, migration 0010) — insert-only.
+    # The denial log is a guarded read surface, never mutated.
+    def add_access_denial(self, denial: AccessDenial) -> None: ...
+    def count_access_denials(self) -> int: ...
+    def list_access_denials(self) -> list[AccessDenial]: ...
     def list_storm_reviews(
         self, declaration_id: str | None = None
     ) -> list[StormReview]: ...
@@ -1229,6 +1235,28 @@ class SqlStore:
             fetch="all",
         )
         return [StormDeclaration.model_validate(json.loads(r[0])) for r in rows]
+
+    # -- Access denials (Round 11, migration 0010) ---------------
+    def add_access_denial(self, denial: AccessDenial) -> None:
+        self._insert(
+            "access_denials",
+            denial.denial_id,
+            denial.model_dump(mode="json"),
+            table_seq="access_denials",
+        )
+
+    def count_access_denials(self) -> int:
+        row = self._run(
+            "SELECT COUNT(*) FROM access_denials", fetch="one"
+        )
+        return int(row[0])
+
+    def list_access_denials(self) -> list[AccessDenial]:
+        rows = self._run(
+            "SELECT payload FROM access_denials ORDER BY act_seq",
+            fetch="all",
+        )
+        return [AccessDenial.model_validate_json(r[0]) for r in rows]
 
     def add_storm_review(self, review: StormReview) -> None:
         row = self._run(
