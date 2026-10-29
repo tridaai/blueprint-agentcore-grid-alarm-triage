@@ -694,6 +694,25 @@ def run_demo(settings: Settings | None = None) -> Services:
             f"Oversight: auditor generation refused ({exc.reason}) "
             "— the auditor reads reports; it does not generate them."
         )
+
+    # Round 13: the model ledger — every brief the demo assembled
+    # routed through the gateway, so the flood's ledger holds one
+    # completed record per stored brief, folding exactly, on the
+    # offline profile at the pack's zero rates.
+    from grid_triage.model_gateway import verify_ledger
+
+    ledger = svc.model_gateway.ledger_view(flood.incident_id)
+    ledger_problems = verify_ledger(svc.store)
+    print(
+        f"Model ledger for {flood.incident_id}: "
+        f"{ledger['calls_completed']} completed calls "
+        f"({ledger['input_tokens']} in / {ledger['output_tokens']} "
+        f"out tokens, cost {ledger['cost_micro']} micro-dollars at "
+        f"the offline profile's pack rates); refused "
+        f"{ledger['calls_refused_budget']}, errored "
+        f"{ledger['calls_errored']}; verifier problems: "
+        f"{ledger_problems}."
+    )
     return svc
 
 

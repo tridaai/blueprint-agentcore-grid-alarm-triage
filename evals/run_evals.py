@@ -279,6 +279,23 @@ Round 12 counters:
                                  principal that lands, or whose
                                  refusal is not on the denial log
 
+Round 13 counters:
+  model_ledger_errors            a brief assembled through the
+                                 wired gateway without exactly
+                                 one completed ledger record, a
+                                 fold that disagrees with the
+                                 records, or a ledger the
+                                 independent verifier does not
+                                 pass clean
+  model_budget_errors            a call past the incident's
+                                 budget that reaches the port, or
+                                 a budget refusal that is not on
+                                 the ledger
+  model_gateway_profile_errors   the fail-closed hosted profile
+                                 producing a brief through the
+                                 gateway, falling back, or leaving
+                                 no error record
+
 Run: uv run python evals/run_evals.py  (exit 0 = GATE: PASS)
 """
 
@@ -2295,7 +2312,85 @@ def main() -> int:
     if svc.store.count_access_denials() != _denials_before + 1:
         counters["report_generation_denial_errors"] += 1
 
-    print("Evals — grid alarm triage agent (Rounds 1-12)")
+    # -- Round 13: the model gateway and its cost ledger --------
+    # A hermetic second deployment: the flood worked through the
+    # wired assembler only, so every stored brief must carry
+    # exactly one completed ledger record, the fold must be
+    # exact, and the independent verifier must pass the ledger
+    # clean. Then the budget and the hosted profile are probed
+    # on the same store.
+    counters["model_ledger_errors"] = 0
+    counters["model_budget_errors"] = 0
+    counters["model_gateway_profile_errors"] = 0
+    from grid_triage.agent import BedrockProfile as _BedrockProfile
+    from grid_triage.agent import ModelNotConfigured as _MNC
+    from grid_triage.agent import OfflineComposer as _OfflineComposer
+    from grid_triage.config import Settings as _Settings13
+    from grid_triage.model_gateway import MODEL_PACK as _MODEL_PACK
+    from grid_triage.model_gateway import ModelBudgetRefusal as _MBR
+    from grid_triage.model_gateway import ModelGateway as _ModelGateway
+    from grid_triage.model_gateway import verify_ledger as _verify_ledger
+    from grid_triage.wiring import Services as _Services13
+
+    with tempfile.TemporaryDirectory() as _td13:
+        _tmp13 = Path(_td13)
+        svc13 = _Services13(
+            _Settings13(
+                sqlite_path=str(_tmp13 / "grid13.db"),
+                object_store_dir=str(_tmp13 / "objects13"),
+            )
+        )
+        svc13.intake.ingest_feed(svc13.feed.fetch_alarms())
+        _created13 = svc13.correlator.correlate_new(svc13.topology)
+        _flood13 = next(
+            i for i in _created13 if i.anchor_alarm_id == FLOOD_ALARM_IDS[0]
+        )
+        svc13.assembler.assemble(
+            _flood13.incident_id, T0 + timedelta(minutes=30)
+        )
+        svc13.assembler.assemble(
+            _flood13.incident_id, T0 + timedelta(minutes=45)
+        )
+        _briefs13 = svc13.store.list_briefs(_flood13.incident_id)
+        _view13 = svc13.model_gateway.ledger_view(_flood13.incident_id)
+        if len(_briefs13) != 2 or _view13["calls_completed"] != 2:
+            counters["model_ledger_errors"] += 1
+        if _view13["calls_recorded"] != 2:
+            counters["model_ledger_errors"] += 1
+        if _verify_ledger(svc13.store):
+            counters["model_ledger_errors"] += 1
+        _facts13 = [
+            {"item_id": "ALM-FLD-001", "field": "kind", "value": "feeder_trip"}
+        ]
+        _pack13 = dict(_MODEL_PACK, max_calls_per_incident=2)
+        _gw13 = _ModelGateway(svc13.store, _OfflineComposer(), pack=_pack13)
+        _gw13.propose_brief("INC-EVAL-BUDGET", _facts13, at=T0)
+        _gw13.propose_brief("INC-EVAL-BUDGET", _facts13, at=T0)
+        try:
+            _gw13.propose_brief("INC-EVAL-BUDGET", _facts13, at=T0)
+            counters["model_budget_errors"] += 1
+        except _MBR:
+            pass
+        _statuses13 = [
+            r.status for r in svc13.store.list_model_calls("INC-EVAL-BUDGET")
+        ]
+        if _statuses13 != ["completed", "completed", "refused_budget"]:
+            counters["model_budget_errors"] += 1
+        _gw13b = _ModelGateway(svc13.store, _BedrockProfile(), pack=_MODEL_PACK)
+        try:
+            _gw13b.propose_brief("INC-EVAL-PROFILE", _facts13, at=T0)
+            counters["model_gateway_profile_errors"] += 1
+        except _MNC:
+            pass
+        _err13 = svc13.store.list_model_calls("INC-EVAL-PROFILE")
+        if (
+            len(_err13) != 1
+            or _err13[0].status != "error"
+            or _err13[0].cost_micro != 0
+        ):
+            counters["model_gateway_profile_errors"] += 1
+
+    print("Evals — grid alarm triage agent (Rounds 1-13)")
     for name, value in counters.items():
         print(f"  {name}: {value} (required 0)")
     failed = [n for n, v in counters.items() if v != 0]
