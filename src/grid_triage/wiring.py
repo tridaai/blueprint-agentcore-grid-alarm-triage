@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 
 from grid_triage.access import AccessControl
 from grid_triage.agent import IncidentAssembler, model_for_profile
+from grid_triage.model_gateway import ModelGateway
 from grid_triage.board import BoardService
 from grid_triage.cause import CauseService
 from grid_triage.closure import ClosureService
@@ -125,6 +126,14 @@ class Services:
         # same store. Generation is a named act; the service
         # computes and verifies, it operates nothing.
         self.oversight = OversightService(self.store, self.storm)
+        # Round 13: the model gateway — the one governed door
+        # for the assembler's model call, with its insert-only
+        # cost ledger over the same store. The configured profile
+        # is wrapped, never replaced: offline by default, the
+        # fail-closed bedrock profile when selected.
+        self.model_gateway = ModelGateway(
+            self.store, model_for_profile(settings.model_profile)
+        )
         self.assembler = IncidentAssembler(
             self.store,
             self.chain,
@@ -132,6 +141,7 @@ class Services:
             cause=self.cause,
             memory=self.memory,
             etr=self.etr,
+            gateway=self.model_gateway,
         )
         # Round 11: the access control — one judge over the
         # store's denial log, bound onto every act-recording
@@ -157,6 +167,7 @@ class Services:
             self.revisions,
             self.handover,
             self.oversight,
+            self.model_gateway,
             self.memory,
         ):
             service.access = self.access

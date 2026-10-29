@@ -40,6 +40,7 @@ from grid_triage.models import (
     IncidentSplit,
     IncidentStatus,
     MemoryRecord,
+    ModelCallRecord,
     Notification,
     OversightReport,
     PostCloseContradiction,
@@ -192,6 +193,12 @@ class Store(Protocol):
     def add_access_denial(self, denial: AccessDenial) -> None: ...
     def count_access_denials(self) -> int: ...
     def list_access_denials(self) -> list[AccessDenial]: ...
+    # Model calls (Round 13, migration 0012) — the gateway's
+    # cost ledger: insert-only, totals always fold from records.
+    def add_model_call(self, record: ModelCallRecord) -> None: ...
+    def list_model_calls(
+        self, incident_id: str | None = None
+    ) -> list[ModelCallRecord]: ...
     def list_storm_reviews(
         self, declaration_id: str | None = None
     ) -> list[StormReview]: ...
@@ -1269,6 +1276,38 @@ class SqlStore:
             fetch="all",
         )
         return [AccessDenial.model_validate_json(r[0]) for r in rows]
+
+    # -- Model calls (Round 13, migration 0012) ----------------
+
+    def add_model_call(self, record: ModelCallRecord) -> None:
+        self._run(
+            "INSERT INTO model_calls"
+            " (call_id, incident_id, act_seq, payload)"
+            " VALUES (?,?,?,?)",
+            (
+                record.call_id,
+                record.incident_id,
+                self._next_seq("model_calls"),
+                record.model_dump_json(),
+            ),
+        )
+
+    def list_model_calls(
+        self, incident_id: str | None = None
+    ) -> list[ModelCallRecord]:
+        if incident_id is None:
+            rows = self._run(
+                "SELECT payload FROM model_calls ORDER BY act_seq",
+                fetch="all",
+            )
+        else:
+            rows = self._run(
+                "SELECT payload FROM model_calls"
+                " WHERE incident_id = ? ORDER BY act_seq",
+                (incident_id,),
+                fetch="all",
+            )
+        return [ModelCallRecord.model_validate_json(r[0]) for r in rows]
 
     def add_storm_review(self, review: StormReview) -> None:
         row = self._run(

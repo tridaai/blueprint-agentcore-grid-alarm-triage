@@ -431,10 +431,17 @@ class IncidentAssembler:
     time for a not-computable estimate — is refused."""
 
     def __init__(self, store, chain: EvidenceChain, model: ModelPort,
-                 cause: CauseService | None = None, memory=None, etr=None):
+                 cause: CauseService | None = None, memory=None, etr=None,
+                 gateway=None):
         self.store = store
         self.chain = chain
         self.model = model
+        # Round 13: when the wiring provides a model gateway, the
+        # one model call routes through it — recorded, measured
+        # and budget-judged — and the brief still names the
+        # wrapped port's profile. A bare construction (unit
+        # tests) calls the port directly, as before.
+        self.gateway = gateway
         self.cause = cause or CauseService(store, chain)
         self.memory = memory  # a MemoryService, or None
         self.etr = etr  # an EtrService, or None
@@ -613,7 +620,12 @@ class IncidentAssembler:
         if self.memory is not None:
             hits = self.memory.retrieve_for_incident(incident_id, now)
             facts += self.read_prior_facts(hits)
-        statements = self.model.propose_brief(facts)
+        if self.gateway is not None:
+            statements = self.gateway.propose_brief(
+                incident_id, facts, at=now
+            )
+        else:
+            statements = self.model.propose_brief(facts)
         problems = self.resolver.problems(incident_id, statements)
         if problems:
             raise CitationRefusal(problems)

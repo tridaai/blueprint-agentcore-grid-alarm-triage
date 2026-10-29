@@ -759,6 +759,34 @@ class OversightReport(BaseModel):
     fingerprint: str
 
 
+class ModelCallRecord(BaseModel):
+    """One insert-only row of the model gateway's cost ledger
+    (Round 13, migration 0012). Every call the gateway routes —
+    completed, refused at the budget, or errored by the wrapped
+    port — lands as one of these before control returns to the
+    caller. The sizes are measured on the canonical JSON of the
+    facts handed to the port and the statements it returned; the
+    token estimates and the cost are derived from those sizes by
+    the model pack's stated rule and rates, in integer
+    micro-dollars, so a ledger total is an exact fold of its
+    records and never a stored number. A refused or errored call
+    carries zero tokens and zero cost — nothing was produced."""
+
+    call_id: str
+    incident_id: str
+    profile: str
+    purpose: str
+    status: str  # completed | refused_budget | error
+    detail: str = ""
+    input_bytes: int = 0
+    output_bytes: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_micro: int = 0
+    pack_version: str
+    called_at: datetime
+
+
 class Notification(BaseModel):
     """A recorded notification (Law: notify is a tool shape). In R1
     the notification is recorded against the incident; no real
