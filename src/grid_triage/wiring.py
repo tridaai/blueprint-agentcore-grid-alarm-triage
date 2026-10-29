@@ -22,6 +22,7 @@ from grid_triage.handover import HandoverService
 from grid_triage.memory import LocalMemoryDouble, MemoryService
 from grid_triage.object_store import LocalObjectStore
 from grid_triage.oversight import OversightService
+from grid_triage.quarantine import QuarantineService
 from grid_triage.packs import EvidencePackService
 from grid_triage.restoration import EventLogService, RestorationService
 from grid_triage.revisions import FieldUpdateService, RevisionService, TopologyService
@@ -54,7 +55,13 @@ class Services:
         # The service rests on the store alone, so it is built
         # before the consumers that read the fold.
         self.storm = StormService(self.store)
+        # Round 14: the quarantine book — one instance over the
+        # store, rebound onto the intake doors that screen
+        # through it (ingest and field updates build their own
+        # over the same store when constructed bare).
+        self.quarantine = QuarantineService(self.store)
         self.intake = IngestService(self.store)
+        self.intake.quarantine = self.quarantine
         self.correlator = CorrelationService(
             self.store, self.chain, storm=self.storm
         )
@@ -81,6 +88,7 @@ class Services:
         # Round 6: field updates, the topology declaration act,
         # and re-correlation under a declared version.
         self.updates = FieldUpdateService(self.store, self.chain)
+        self.updates.quarantine = self.quarantine
         self.topology_acts = TopologyService(self.store)
         self.revisions = RevisionService(
             self.store,
@@ -168,6 +176,7 @@ class Services:
             self.handover,
             self.oversight,
             self.model_gateway,
+            self.quarantine,
             self.memory,
         ):
             service.access = self.access

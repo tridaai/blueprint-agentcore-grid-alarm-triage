@@ -16,6 +16,7 @@ from grid_triage.access import ACT_INGEST, Principal, guard_act
 from grid_triage.correlation import correlate
 from grid_triage.evidence import EvidenceChain
 from grid_triage.models import Alarm, Incident
+from grid_triage.quarantine import QuarantineService
 from grid_triage.storm import STORM_PACK
 from grid_triage.topology import TopologyView
 
@@ -27,6 +28,10 @@ class DuplicateAlarm(RuntimeError):
 class IngestService:
     def __init__(self, store):
         self.store = store
+        # Round 14: the quarantine book screens device text at
+        # this door. The wiring rebinds the shared instance; a
+        # bare construction builds its own over the same store.
+        self.quarantine = QuarantineService(store)
 
     def ingest(
         self, alarms: list[Alarm], principal: Principal | None = None
@@ -36,6 +41,11 @@ class IngestService:
         for alarm in alarms:
             if self.store.get_alarm(alarm.alarm_id) is not None:
                 raise DuplicateAlarm(f"alarm already ingested: {alarm.alarm_id}")
+            # A message that trips the screen is held in the
+            # book and the alarm stored with the message absent,
+            # so device text never reaches the evidence chain or
+            # the assembler's facts unscreened.
+            alarm = self.quarantine.screen_alarm(alarm, alarm.raised_at)
             self.store.add_alarm(alarm)
             count += 1
         return count

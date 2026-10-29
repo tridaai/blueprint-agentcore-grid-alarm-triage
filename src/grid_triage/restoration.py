@@ -78,6 +78,7 @@ from grid_triage.models import (
     RestorationConfirmation,
     RestorationSignal,
 )
+from grid_triage.quarantine import released_hold_ids
 from grid_triage.severity import SeverityService
 from grid_triage.topology import TopologyView
 from grid_triage.work_orders import WorkOrderService
@@ -327,13 +328,24 @@ class RestorationService:
         return latest
 
     def _crew_update_ids(self, incident_ids: list[str]) -> list[str]:
+        # Round 14: a crew note whose text stands held in the
+        # quarantine book counts as ABSENT here — its stored
+        # note is None, so it falls out below exactly as a note
+        # that was never written does. Once a reviewer releases
+        # the hold, the fold of release acts counts the note
+        # again: the crew wrote it, and a second person has
+        # vouched for it.
+        released = released_hold_ids(self.store)
         ids: list[str] = []
         for incident_id in incident_ids:
             for update in self.store.list_field_updates(incident_id):
-                if (
-                    update.kind == "crew_note"
-                    and update.role == "field_crew"
-                    and update.note
+                if update.kind != "crew_note" or update.role != "field_crew":
+                    continue
+                if update.note:
+                    ids.append(update.update_id)
+                elif any(
+                    hold["field"] == "note" and hold["hold_id"] in released
+                    for hold in update.holds
                 ):
                     ids.append(update.update_id)
         return ids

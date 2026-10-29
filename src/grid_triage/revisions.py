@@ -54,6 +54,7 @@ from grid_triage.models import (
     IncidentRevision,
     TopologyDeclaration,
 )
+from grid_triage.quarantine import QuarantineService, screen_text
 from grid_triage.severity import SeverityService, compute_assessment
 from grid_triage.topology import TopologyView, load_topology_file
 
@@ -121,6 +122,12 @@ class FieldUpdateService:
         self.store = store
         self.chain = chain
         self.pack = pack
+        # Round 14: the quarantine book screens this door's
+        # text (and any carried alarm's message) before anything
+        # is stored. The wiring rebinds the shared instance; a
+        # bare construction builds its own over the same store —
+        # the state lives in the store, so they are one book.
+        self.quarantine = QuarantineService(store)
         # Round 7: the restoration service registers its post-close
         # handler here (wiring sets it after construction — the
         # restoration service itself depends on the closure service,
@@ -308,6 +315,10 @@ class FieldUpdateService:
         correlation: dict = {}
         rule_id: str | None = None
         if alarm is not None:
+            # Round 14: a carried alarm passes the quarantine
+            # door like any ingested alarm — a tripped message
+            # is held and the alarm stored with it absent.
+            alarm = self.quarantine.screen_alarm(alarm, reported_at)
             self.store.add_alarm(alarm)
             closed = self._closed_outcome(incident, alarm, reported_at)
             if closed is not None:
@@ -331,6 +342,39 @@ class FieldUpdateService:
                     recorded_on=reported_at,
                     item_id=f"EV-{alarm.alarm_id}",
                 )
+        # Round 14: the update's own text passes the screen
+        # before the update is built. A tripped field is stored
+        # as absent — None, exactly as if the text had never
+        # arrived — with the hold named in its place; the raw
+        # text is placed in the book once the update exists to
+        # name as its source. Untouched text passes byte for
+        # byte, as it always has.
+        stored_note, stored_finding = note, finding
+        holds: list[dict] = []
+        pending_holds: list[tuple] = []
+        for field_name, channel, value in (
+            ("note", "field_update_note", note),
+            ("finding", "field_update_finding", finding),
+        ):
+            if not value:
+                continue
+            rules = screen_text(value, self.quarantine.pack)
+            if not rules:
+                continue
+            hold_id = self.quarantine.hold_id_for(
+                channel=channel,
+                field=field_name,
+                incident_id=incident_id,
+                reported_by=reported_by,
+                raw_text=value,
+                discriminator=f"{kind}@{reported_at.isoformat()}",
+            )
+            holds.append({"field": field_name, "hold_id": hold_id})
+            pending_holds.append((hold_id, channel, field_name, value, rules))
+            if field_name == "note":
+                stored_note = None
+            else:
+                stored_finding = None
         body = {
             "incident_id": incident_id,
             "pack_version": self.pack["version"],
@@ -338,14 +382,27 @@ class FieldUpdateService:
             "reported_by": reported_by,
             "role": role,
             "reported_at": reported_at.isoformat(),
-            "note": note,
+            "note": stored_note,
             "device_id": device_id,
-            "finding": finding,
+            "finding": stored_finding,
             "alarm_id": alarm.alarm_id if alarm else None,
             "correlation": correlation,
+            "holds": holds,
         }
         update = FieldUpdate(update_id=_hash_id("UPD", body), **body)
         self.store.add_field_update(update)
+        for hold_id, channel, field_name, value, rules in pending_holds:
+            self.quarantine.place_hold(
+                hold_id=hold_id,
+                channel=channel,
+                source_ref=update.update_id,
+                field=field_name,
+                incident_id=incident_id,
+                reported_by=reported_by,
+                raw_text=value,
+                rules=rules,
+                at=reported_at,
+            )
         self.chain.append(
             incident_id,
             "field_update",
