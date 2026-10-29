@@ -127,6 +127,7 @@ SURFACE_TOPOLOGY = "topology"
 SURFACE_DENIAL_LOG = "denial_log"
 SURFACE_ACCESS_PACK = "access_pack"
 SURFACE_OVERSIGHT = "oversight"
+SURFACE_MODEL_LEDGER = "model_ledger"
 SURFACES = [
     SURFACE_INCIDENT,
     SURFACE_ALARMS,
@@ -143,6 +144,7 @@ SURFACES = [
     SURFACE_DENIAL_LOG,
     SURFACE_ACCESS_PACK,
     SURFACE_OVERSIGHT,
+    SURFACE_MODEL_LEDGER,
 ]
 
 # Acts — the named operations the pack gates. These are the
@@ -347,6 +349,7 @@ _OPERATIONAL_READS = [
     SURFACE_TOPOLOGY,
     SURFACE_ACCESS_PACK,
     SURFACE_OVERSIGHT,
+    SURFACE_MODEL_LEDGER,
 ]
 
 # The control-room acts an operator performs. The duty manager

@@ -43,6 +43,7 @@ from grid_triage.access import (
     SURFACE_FIELD_UPDATES,
     SURFACE_INCIDENT,
     SURFACE_MEMORY,
+    SURFACE_MODEL_LEDGER,
     SURFACE_OVERSIGHT,
     SURFACE_PACKS,
     SURFACE_RESTORATION,
@@ -1771,6 +1772,19 @@ def verify_report(report_id: str, request: Request) -> dict:
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"report_id": report_id, "problems": problems}
+
+
+@app.get("/incidents/{incident_id}/model-ledger")
+def get_model_ledger(incident_id: str, request: Request) -> dict:
+    _guard_incident(request, incident_id, SURFACE_MODEL_LEDGER)
+    s = svc()
+    if s.store.get_incident(incident_id) is None:
+        raise HTTPException(
+            status_code=404, detail=f"no such incident: {incident_id}"
+        )
+    body = s.model_gateway.ledger_view(incident_id)
+    body["incident_id"] = incident_id
+    return body
 
 
 @app.get("/topology/versions")
