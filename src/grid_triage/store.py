@@ -41,6 +41,7 @@ from grid_triage.models import (
     IncidentStatus,
     MemoryRecord,
     Notification,
+    OversightReport,
     PostCloseContradiction,
     RestorationConfirmation,
     RestorationSignal,
@@ -208,6 +209,13 @@ class Store(Protocol):
     def list_handover_acceptances(
         self, handover_id: str | None = None
     ) -> list[HandoverAcceptance]: ...
+    # oversight reports (Round 12: insert-only artefacts — the
+    # port exposes no update and no delete)
+    def add_oversight_report(self, report: OversightReport) -> None: ...
+    def get_oversight_report(
+        self, report_id: str
+    ) -> OversightReport | None: ...
+    def list_oversight_reports(self) -> list[OversightReport]: ...
     # topology index
     def load_topology(self, payload: dict, loaded_at: datetime) -> None: ...
     def get_topology_payload(self, version: str) -> dict | None: ...
@@ -1368,3 +1376,33 @@ class SqlStore:
         return [
             HandoverAcceptance.model_validate(json.loads(r[0])) for r in rows
         ]
+
+    # -- oversight reports (Round 12) ------------------------------
+    def add_oversight_report(self, report: OversightReport) -> None:
+        self._run(
+            "INSERT INTO oversight_reports"
+            " (report_id, act_seq, payload)"
+            " VALUES (?,?,?)",
+            (
+                report.report_id,
+                self._next_seq("oversight_reports"),
+                report.model_dump_json(),
+            ),
+        )
+
+    def get_oversight_report(
+        self, report_id: str
+    ) -> OversightReport | None:
+        row = self._run(
+            "SELECT payload FROM oversight_reports WHERE report_id = ?",
+            (report_id,),
+            fetch="one",
+        )
+        return OversightReport.model_validate(json.loads(row[0])) if row else None
+
+    def list_oversight_reports(self) -> list[OversightReport]:
+        rows = self._run(
+            "SELECT payload FROM oversight_reports ORDER BY act_seq",
+            fetch="all",
+        )
+        return [OversightReport.model_validate(json.loads(r[0])) for r in rows]

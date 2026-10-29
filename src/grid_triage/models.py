@@ -727,6 +727,38 @@ class HandoverAcceptance(BaseModel):
     accepted_at: datetime
 
 
+class OversightReport(BaseModel):
+    """One operations oversight report (Round 12).
+
+    A periodic statement of how the operation performed over a
+    stated half-open window [``window_start``, ``window_end``),
+    computed **only from artefacts of record** and aggregate by
+    construction: volumes by state, severity mix, ETR accuracy
+    (storm and normal never blended), restoration outcomes,
+    storm activity, handover position. No section names an
+    incident, an alarm or a person. ``fingerprint`` covers the
+    pack version, the window and the sections; the verifier
+    re-performs every figure by an independent path and names
+    any section that does not recompute. Reports are
+    insert-only and content-addressed: re-generating over an
+    unmoved record returns the standing artefact, and over a
+    moved record produces the next artefact for the window,
+    linked by ``supersedes``. The artefact is an internal
+    oversight statement — not a regulatory filing.
+    """
+
+    report_id: str
+    pack_version: str
+    generated_by: str
+    role: str
+    window_start: datetime
+    window_end: datetime
+    generated_at: datetime
+    supersedes: str | None = None
+    sections: dict = Field(default_factory=dict)
+    fingerprint: str
+
+
 class Notification(BaseModel):
     """A recorded notification (Law: notify is a tool shape). In R1
     the notification is recorded against the incident; no real

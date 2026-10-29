@@ -126,6 +126,7 @@ SURFACE_PACKS = "packs"
 SURFACE_TOPOLOGY = "topology"
 SURFACE_DENIAL_LOG = "denial_log"
 SURFACE_ACCESS_PACK = "access_pack"
+SURFACE_OVERSIGHT = "oversight"
 SURFACES = [
     SURFACE_INCIDENT,
     SURFACE_ALARMS,
@@ -141,6 +142,7 @@ SURFACES = [
     SURFACE_TOPOLOGY,
     SURFACE_DENIAL_LOG,
     SURFACE_ACCESS_PACK,
+    SURFACE_OVERSIGHT,
 ]
 
 # Acts — the named operations the pack gates. These are the
@@ -173,6 +175,7 @@ ACT_STAND_DOWN_STORM = "stand_down_storm"
 ACT_COMPUTE_STORM_REVIEW = "compute_storm_review"
 ACT_ASSEMBLE_HANDOVER = "assemble_handover"
 ACT_ACCEPT_HANDOVER = "accept_handover"
+ACT_GENERATE_REPORT = "generate_report"
 ACT_SEED_HISTORY = "seed_history"
 ACTS = [
     ACT_INGEST,
@@ -201,6 +204,7 @@ ACTS = [
     ACT_COMPUTE_STORM_REVIEW,
     ACT_ASSEMBLE_HANDOVER,
     ACT_ACCEPT_HANDOVER,
+    ACT_GENERATE_REPORT,
     ACT_SEED_HISTORY,
 ]
 
@@ -232,6 +236,7 @@ ACT_SURFACES = {
     ACT_COMPUTE_STORM_REVIEW: SURFACE_STORM,
     ACT_ASSEMBLE_HANDOVER: SURFACE_CONSOLE,
     ACT_ACCEPT_HANDOVER: SURFACE_CONSOLE,
+    ACT_GENERATE_REPORT: SURFACE_OVERSIGHT,
     ACT_SEED_HISTORY: SURFACE_MEMORY,
 }
 
@@ -322,7 +327,11 @@ class AccessPack(BaseModel):
 
 
 # The operational reads: the whole working record except the
-# denial log, which is the oversight surface.
+# denial log, which is the oversight surface. Round 12 adds the
+# oversight reports themselves: aggregate management figures
+# are working record for the shift's authorities (and, like
+# everything, readable by the auditor) — they are not a
+# dispatch or field-crew surface.
 _OPERATIONAL_READS = [
     SURFACE_INCIDENT,
     SURFACE_ALARMS,
@@ -337,6 +346,7 @@ _OPERATIONAL_READS = [
     SURFACE_PACKS,
     SURFACE_TOPOLOGY,
     SURFACE_ACCESS_PACK,
+    SURFACE_OVERSIGHT,
 ]
 
 # The control-room acts an operator performs. The duty manager
@@ -371,6 +381,7 @@ _OPERATOR_ACTS = [
     ACT_COMPUTE_STORM_REVIEW,
     ACT_ASSEMBLE_HANDOVER,
     ACT_ACCEPT_HANDOVER,
+    ACT_GENERATE_REPORT,
     ACT_SEED_HISTORY,
 ]
 _DUTY_MANAGER_ACTS = [

@@ -20,6 +20,7 @@ from grid_triage.evidence import EvidenceChain
 from grid_triage.handover import HandoverService
 from grid_triage.memory import LocalMemoryDouble, MemoryService
 from grid_triage.object_store import LocalObjectStore
+from grid_triage.oversight import OversightService
 from grid_triage.packs import EvidencePackService
 from grid_triage.restoration import EventLogService, RestorationService
 from grid_triage.revisions import FieldUpdateService, RevisionService, TopologyService
@@ -119,6 +120,11 @@ class Services:
             payload,
         )
         self.handover = HandoverService(self.store, self.board)
+        # Round 12: operations oversight reporting — the
+        # insert-only, re-performable window artefact over the
+        # same store. Generation is a named act; the service
+        # computes and verifies, it operates nothing.
+        self.oversight = OversightService(self.store, self.storm)
         self.assembler = IncidentAssembler(
             self.store,
             self.chain,
@@ -150,6 +156,7 @@ class Services:
             self.topology_acts,
             self.revisions,
             self.handover,
+            self.oversight,
             self.memory,
         ):
             service.access = self.access
