@@ -29,7 +29,7 @@ from grid_triage.access import (
 )
 from grid_triage.closure import ClosureRefusal
 from grid_triage.handover import HandoverRefusal
-from grid_triage.seed import T0
+from grid_triage.seed import T0, lone_alarms
 
 FLOOD = "INC-ALM-FLD-001"
 LONE = "INC-ALM-LONE-001"
@@ -427,10 +427,14 @@ def test_rt17_carried_close_requires_the_gate_preconditions(fed):
 def test_rt17_principal_less_close_is_unchanged(fed):
     # The trusted local path keeps the Round 4 behaviour exactly:
     # no confirmation, no access artefacts, the closure lands.
+    # Times derive from the LONE anchor (raised 09:41 UTC), as the
+    # Round 4 surface tests do — restored after the alarm, never
+    # before it (the R4 refusal this test must not trip).
+    anchor = lone_alarms()[0].raised_at
     closure, _outcome, _record = fed.closure.close_incident(
-        LONE, "op.dana", "operator", T0 + timedelta(hours=3),
+        LONE, "op.dana", "operator", anchor + timedelta(minutes=15),
         "Lone breaker reclosed after inspection.",
-        T0 + timedelta(hours=4),
+        anchor + timedelta(minutes=30),
     )
     assert closure.incident_id == LONE
     assert fed.store.count_access_denials() == 0
