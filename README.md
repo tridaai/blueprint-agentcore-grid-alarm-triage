@@ -542,6 +542,63 @@ fail-closed judge, and every refusal recorded as an artefact.
   the decision is recorded as an amendment in
   `docs/red-team.md`.
 
+## What Round 12 builds
+
+Round 12 closes the red team's two remaining findings and
+gives the record the artefact management reads later.
+
+- **RT-15 — the storm position since the handover, shown.**
+  A storm declared after a handover still does not stale it —
+  the storm section is the fold at the handover's own moment,
+  by design, so a storm handover stays acceptable when the
+  window stands down. But the handover's read surface (the
+  view the API, CLI, Runtime and console all serve) now
+  carries a **derived flag** alongside the artefact: the storm
+  acts declared after its moment, listed as recorded, and a
+  boolean naming that the storm position has moved. Derived
+  means computed at read time — never stored on the artefact,
+  never folded into its record hash, never part of its
+  verification. The incoming operator sees the new storm
+  before accepting; the artefact keeps saying exactly what
+  was true at its moment. (An act *backdated* to before the
+  moment is the other case, and needs no flag: it changes the
+  fold at the moment, so the existing drift path names it.)
+- **RT-16 — a span cap, adopted as a pack decision.**
+  Correlation pack `2026.10.2` adds `max_span_seconds`: no
+  alarm joins an incident — as a member or as a joining
+  anchor — more than four hours from the incident's anchor,
+  however tight the nearest-member chain runs. What the cap
+  refuses stays visible: a non-anchor beyond it is
+  uncorrelated with the named reason `beyond_span_cap`, and an
+  anchor beyond it opens its own incident. The `2026.10.1`
+  pack is kept verbatim, carries no cap key and re-performs
+  uncapped — a correlation re-performs under the pack version
+  its incident pins, and the loader fails closed on an unknown
+  version. The planted fixtures are untouched (the flood spans
+  six minutes); the eval gate grades both directions.
+- **Operations oversight reporting.** A window report is an
+  insert-only, content-addressed artefact (migration 0011)
+  over a stated half-open window: incident volumes by state
+  (superseded / closed / live-open, summing to the total),
+  severity mix by head band, ETR accuracy in the ledger's own
+  shape **by operating mode — storm and normal never
+  blended**, restoration outcomes, storm activity, and the
+  handover position. Every rate carries
+  `{value, numerator, denominator}`; over an empty population
+  the value is `None` and the section reads `no_data` — never
+  0%, never 100%. No section names an incident: the report is
+  position and proportion, not a case file, and it states on
+  its face that it is an internal oversight artefact, not a
+  regulatory filing. Re-generating over an unmoved record
+  returns the standing artefact; over a moved record it
+  supersedes by link. **Verification is a second path**: the
+  verifier re-performs every figure with its own walk over
+  the store and names the sections that do not recompute —
+  `make reports-check` plants forgeries and grades that they
+  are named. Generation is a named act under the access pack:
+  operator and duty manager generate, the auditor reads and
+  generates none, and every refusal is recorded first.
+
 ## Quick start
 
 ```bash
@@ -549,6 +606,7 @@ make install          # uv sync --extra dev
 make demo             # planted streams: flood in, one incident out
 make test             # pytest
 make evals            # the eval gate (zero-tolerance counters)
+make reports-check    # the oversight report check (plants forgeries)
 make serve            # AgentCore Runtime app on :8080
 make api              # operations API on :8000
 make invoke           # local in-process invoke of the agent step
@@ -628,7 +686,11 @@ What is built and what is not, plainly:
   chaining grows an incident's span by the pack's stated
   nearest-member rule, and the R4 closure surface was not
   itself restoration-gated. Round 11 closed that third
-  finding by decision (above); the other two stand.
+  finding by decision (above), and Round 12 addressed the
+  other two: RT-15 by the derived flag on the handover's read
+  surface, RT-16 by adopting the span cap as correlation pack
+  2026.10.2 — both recorded as an amendment in
+  `docs/red-team.md`. No red-team finding stands open.
 - **Access control governs principal-carrying calls
   (Round 11).** A call that carries no principal — the CLI,
   the local harness — is the trusted local operations path,
@@ -639,6 +701,15 @@ What is built and what is not, plainly:
   *authorisation* — which role may read and do what; *who* a
   principal id belongs to is the identity layer's question,
   not this repo's.
+- **Oversight reports are statements over the record as it
+  stands (Round 12).** A report's verifier re-performs its
+  figures against the current store: a report over a record
+  that has since moved names its drift, which is what the
+  supersede-by-link discipline answers — the same stance the
+  handover takes toward staleness. The span cap is likewise a
+  pack value, not a universal truth: 2026.10.2's four hours is
+  this utility's stated decision, and 2026.10.1's uncapped
+  correlations stand as computed.
 - **The AgentCore Policy pack is a later round.** In R1, Law 1 (no
   control) is enforced by the tool catalogue's construction and
   the registry scan; the Cedar policy pack at the Gateway is the
@@ -666,15 +737,17 @@ src/grid_triage/   models, topology, correlation, services (ingest),
                    roster / etr / closure (R4), work_orders (R5),
                    revisions (R6), restoration (R7), storm (R8),
                    board / handover / static console (R9),
-                   access (R11), runtime_app / runtime_main
+                   access (R11), oversight (R12),
+                   runtime_app / runtime_main
                    (AgentCore Runtime),
                    api, demo, cli, local_invoke, wiring, config
 data/topology/     versioned territory data (v1.json, v2.json)
 data/roster/       versioned crew roster artefact (v1.json)
 migrations/        numbered SQL migrations, sqlite + postgres trees
-tests/             pytest suite (233 tests through R11)
+tests/             pytest suite (TESTCOUNT tests through R12)
 evals/             the eval gate (run_evals.py)
 scripts/           check_console.py — the console correctness check
+                   check_reports.py — the oversight report check
 docs/              architecture.md — the honest AgentCore mapping
 ```
 

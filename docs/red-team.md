@@ -343,3 +343,97 @@ What deliberately did **not** change, and why:
 Kept as regression tests in `tests/test_r11.py` and as the
 zero-tolerance eval counter `ungated_surface_closures`.
 RT-15 and RT-16 remain open as recorded above.
+
+## Amendment — Round 12 (appended; the Round 10 record and the Round 11 amendment above are untouched)
+
+### RT-15 — addressed by Round 12: the derived flag
+
+The design this finding asked for has been built, in the shape
+the finding itself prescribed: **the acceptance surface now
+shows declarations recorded after the handover's moment
+alongside the artefact, without folding them into its hash.**
+The handover's read surface — the one view the API, CLI,
+Runtime and console all serve — carries two derived fields:
+`storm_acts_after_handover` (the storm acts whose
+`declared_at` postdates the handover's moment, in declared
+order, with their kind, scope and declarer) and
+`storm_position_moved`, the boolean over it.
+
+What deliberately did **not** change, and why:
+
+- **The artefact, its hash and its verification are
+  untouched.** The storm section remains the fold at the
+  handover's own moment; a post-handover declaration does not
+  stale the handover and does not block its acceptance — the
+  pinned behaviour of `test_rt15` stands as written. The naive
+  fix the finding warned against (re-performing the storm
+  section live) would still stale every handover assembled
+  during a storm the moment the window stands down; the flag
+  exists precisely so that fix stays unnecessary.
+- **The flag is a read, never a record.** It is computed from
+  the declaration acts at read time and stored nowhere; two
+  reads of the same handover at different moments can differ
+  in the flag while the artefact stays byte-identical. That
+  is the honest shape for "what has happened since": a
+  statement about the present, not a revision of the past.
+- **Backdated acts are not the flag's business.** An act
+  declared for a moment *before* the handover's changes the
+  fold at that moment, so the storm section itself fails to
+  recompute and the existing drift path names it — graded as
+  a test, so the boundary between the two mechanisms is
+  pinned, not assumed.
+
+Kept as regression tests in `tests/test_r12.py` and as the
+zero-tolerance eval counter `handover_storm_flag_errors`,
+which grades both halves: the flag raised, and the artefact
+unstaled with its acceptance still binding. The procedural
+discipline the finding left behind (assemble at the shift
+change) is still good practice; it is no longer the only
+defence.
+
+### RT-16 — closed by Round 12 pack decision
+
+The pack decision this finding asked the utility to make has
+been taken: **an incident's span is capped, as a versioned
+correlation-pack value.** Correlation pack `2026.10.2` adds
+`max_span_seconds` (14400 — four hours): no alarm joins an
+incident, as a member or as a joining anchor, when it lies
+further than the cap from the incident's anchor alarm, however
+tight the nearest-member chain runs. The probe's ladder is
+now cut at the cap: the sags inside four hours stand as
+members, the first sag the window still reaches beyond it is
+uncorrelated with the named reason `beyond_span_cap`, the
+trip at the ladder's end opens its own incident — and the
+last sag, nine minutes before that trip, joins the second
+incident rather than chaining onto the first, which is the
+split the cap exists to make.
+
+The versioning discipline the finding's closure required:
+
+- **Historical correlations re-perform unchanged.** The
+  `2026.10.1` pack is kept verbatim in the codebase and
+  carries no cap key, so it is uncapped by construction; the
+  same ladder re-performs under it exactly as it was computed
+  when that pack was current (graded both in tests and in the
+  eval gate, counter `pack_v1_reperformance_errors`). An
+  incident's pinned `correlation_pack_version` states which
+  rule its membership is judged under, and the pack loader
+  fails closed on an unknown version.
+- **The planted fixtures are untouched.** The flood spans six
+  minutes, the lone trip is a single alarm, the nuisance kinds
+  never join in normal mode — the cap changes no graded
+  membership, severity or ETR figure, which the full eval gate
+  re-performs every run.
+- **The dangerous direction still holds.** Anchors are placed
+  before consequences are attached; nothing in the cap lets
+  two faults merge, and what the cap refuses is never dropped
+  silently — it stays on the record as uncorrelated, with the
+  reason naming the rule that refused it.
+
+`test_rt16` has been rewritten deliberately to pin the new
+behaviour in both directions (it remains the finding's pin,
+and its docstring records the change); the full grading lives
+in `tests/test_r12.py` and the eval counters `span_cap_errors`
+and `pack_v1_reperformance_errors`. With RT-17 closed by
+Round 11 and RT-15/RT-16 settled here, no finding in this
+record stands open.

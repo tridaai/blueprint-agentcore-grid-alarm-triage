@@ -361,6 +361,33 @@ enforcement governs calls that carry a principal; identity
 termination in deployment is AgentCore Identity's layer, in
 front of these surfaces.
 
+**Oversight reporting (Round 12)** is the record's periodic
+statement, and the round that closes the red team's book. Its
+two finding-fixes are exercises in the repo's own disciplines.
+RT-15's answer respects the handover's construction: the storm
+section stays the fold at the artefact's moment — re-performing
+it live would stale every storm handover at stand-down — so the
+correction is a *derived read* on the handover surface,
+computed from the declaration acts at read time and stored
+nowhere: post-handover storm acts are shown alongside the
+artefact they postdate, outside its hash and its verification.
+RT-16's answer is a pack revision: correlation pack 2026.10.2
+adds an anchor-relative span cap (`max_span_seconds`), the
+2026.10.1 pack is kept verbatim for re-performance, and an
+incident's pinned pack version decides which rule its
+correlation is judged under — the same versioned-pack
+discipline the topology, severity and storm packs already use.
+The report artefact itself follows the portfolio's reporting
+pattern: insert-only and content-addressed (migration 0011),
+windowed, aggregate-only with no incident named anywhere,
+rates carrying numerator and denominator with empty
+populations reading no-data, generation a named act judged by
+the access pack, and verification implemented as a genuinely
+second computation path (`reperform_sections`) rather than a
+re-call of the first — the property `scripts/check_reports.py`
+grades by planting forgeries whose fingerprints honestly cover
+their wrong figures.
+
 ## Stores
 
 One store port, two dialects (`grid_triage/store.py`): SQLite
