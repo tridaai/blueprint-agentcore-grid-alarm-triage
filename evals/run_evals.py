@@ -2167,8 +2167,17 @@ def main() -> int:
     from grid_triage.oversight import fingerprint_of as _fingerprint_of
     from grid_triage.topology import load_topology_file as _load_topo
 
-    # RT-15 over the eval record.
+    # RT-15 over the eval record. Any storm window the earlier
+    # sections left standing is stood down first — the R12 cell
+    # is declared over FDR-03, and a window already declared
+    # over that scope would (rightly) refuse a second one.
     r12_moment = T0 + timedelta(days=40)
+    for _window in svc.storm.active_windows(r12_moment):
+        svc.storm.stand_down(
+            _window["declaration_id"], "op.dana", "operator",
+            "Eval: closing the earlier cell before the R12 probe",
+            r12_moment - timedelta(minutes=1),
+        )
     r12_handover = svc.handover.assemble("op.dana", "operator", r12_moment)
     svc.storm.declare(
         "op.dana", "operator", "Eval cell", r12_moment + timedelta(hours=1),
