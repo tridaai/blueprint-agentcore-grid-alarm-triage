@@ -46,6 +46,7 @@ from grid_triage.access import (
     SURFACE_MODEL_LEDGER,
     SURFACE_OVERSIGHT,
     SURFACE_PACKS,
+    SURFACE_QUARANTINE,
     SURFACE_RESTORATION,
     SURFACE_SEVERITY,
     SURFACE_STORM,
@@ -67,6 +68,7 @@ from grid_triage.handover import HandoverRefusal
 from grid_triage.models import Alarm
 from grid_triage.oversight import OversightRefusal
 from grid_triage.packs import PackRefusal
+from grid_triage.quarantine import QuarantineRefusal
 from grid_triage.restoration import RestorationRefusal
 from grid_triage.revisions import RevisionRefusal, TopologyRefusal, UpdateRefusal
 from grid_triage.services import DuplicateAlarm
@@ -1785,6 +1787,75 @@ def get_model_ledger(incident_id: str, request: Request) -> dict:
     body = s.model_gateway.ledger_view(incident_id)
     body["incident_id"] = incident_id
     return body
+
+
+# -- Round 14: the injection quarantine -----------------------
+
+
+@app.get("/incidents/{incident_id}/quarantine")
+def get_incident_quarantine(incident_id: str, request: Request) -> dict:
+    _guard_incident(request, incident_id, SURFACE_QUARANTINE)
+    s = svc()
+    if s.store.get_incident(incident_id) is None:
+        raise HTTPException(
+            status_code=404, detail=f"no such incident: {incident_id}"
+        )
+    return s.quarantine.incident_view(incident_id)
+
+
+@app.get("/quarantine/{hold_id}")
+def get_quarantine_hold(hold_id: str, request: Request) -> dict:
+    principal = _principal(
+        request, surface=SURFACE_QUARANTINE, target=hold_id
+    )
+    s = svc()
+    try:
+        return s.quarantine.view(hold_id, principal=principal)
+    except AccessDeniedError as exc:
+        if exc.hidden:
+            raise HTTPException(
+                status_code=404, detail=f"no such quarantine hold: {hold_id}"
+            ) from exc
+        raise _forbidden(exc) from exc
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404, detail=f"no such quarantine hold: {hold_id}"
+        ) from exc
+
+
+class ReleaseQuarantineRequest(BaseModel):
+    released_by: str
+    role: str
+    released_at: datetime | None = None
+
+
+@app.post("/quarantine/{hold_id}/release")
+def release_quarantine_hold(
+    hold_id: str, request: ReleaseQuarantineRequest, http_request: Request
+) -> dict:
+    principal = _principal(
+        http_request, surface=SURFACE_QUARANTINE, target=hold_id
+    )
+    s = svc()
+    try:
+        release = s.quarantine.release(
+            hold_id,
+            request.released_by,
+            request.role,
+            request.released_at or datetime.now(timezone.utc),
+            principal=principal,
+        )
+    except AccessDeniedError as exc:
+        raise _forbidden(exc) from exc
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404, detail=f"no such quarantine hold: {hold_id}"
+        ) from exc
+    except QuarantineRefusal as exc:
+        raise HTTPException(
+            status_code=422, detail={"problems": exc.problems}
+        ) from exc
+    return release.model_dump(mode="json")
 
 
 @app.get("/topology/versions")

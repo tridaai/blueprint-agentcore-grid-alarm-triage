@@ -17,6 +17,7 @@ from grid_triage.handover import HandoverRefusal
 from grid_triage.models import Alarm
 from grid_triage.oversight import OversightRefusal
 from grid_triage.packs import PackRefusal
+from grid_triage.quarantine import QuarantineRefusal
 from grid_triage.restoration import RestorationRefusal
 from grid_triage.revisions import RevisionRefusal, TopologyRefusal, UpdateRefusal
 from grid_triage.severity import SeverityRefusal
@@ -121,6 +122,13 @@ def main(argv: list[str] | None = None) -> int:
     p_upd.add_argument("--reported-at", default=None, help="ISO timestamp; default: now")
     p_updates = sub.add_parser("updates")
     p_updates.add_argument("incident_id")
+    p_quar = sub.add_parser("quarantine")
+    p_quar.add_argument("incident_id")
+    p_qrel = sub.add_parser("quarantine-release")
+    p_qrel.add_argument("hold_id")
+    p_qrel.add_argument("--by", required=True, help="the releasing reviewer's name")
+    p_qrel.add_argument("--role", required=True, help="the releasing reviewer's role")
+    p_qrel.add_argument("--released-at", default=None, help="ISO timestamp; default: now")
     p_recorr = sub.add_parser("recorrelate")
     p_recorr.add_argument("incident_id")
     p_recorr.add_argument("--by", required=True, help="the re-correlating operator's name")
@@ -582,6 +590,28 @@ def main(argv: list[str] | None = None) -> int:
             [u.model_dump(mode="json") for u in svc.updates.list_updates(args.incident_id)],
             indent=2,
         ))
+    elif args.command == "quarantine":
+        if svc.store.get_incident(args.incident_id) is None:
+            print(f"no such incident: {args.incident_id}")
+            return 1
+        print(json.dumps(svc.quarantine.incident_view(args.incident_id), indent=2))
+    elif args.command == "quarantine-release":
+        released_at = (
+            datetime.fromisoformat(args.released_at)
+            if args.released_at
+            else datetime.now(timezone.utc)
+        )
+        try:
+            release = svc.quarantine.release(
+                args.hold_id, args.by, args.role, released_at
+            )
+        except KeyError:
+            print(f"no such quarantine hold: {args.hold_id}")
+            return 1
+        except QuarantineRefusal as exc:
+            print("refused: " + "; ".join(exc.problems))
+            return 1
+        print(json.dumps(release.model_dump(mode="json"), indent=2))
     elif args.command == "recorrelate":
         as_of = (
             datetime.fromisoformat(args.as_of)

@@ -45,6 +45,11 @@ payload names one piece of triage work:
   the topology declaration act, and re-correlation under a
   declared version. Declaring and re-correlating are recorded
   operator acts over data — neither operates anything.
+- ``{"action": "get_quarantine" | "release_quarantine", ...}``
+  — the Round 14 quarantine book: an incident's holds in their
+  escaped view form, and the named reviewer's release act.
+  Reading and releasing govern text on the record — neither
+  operates anything.
 - ``{"action": "record_restoration_signal" |
   "confirm_restoration" | "get_restoration_confirmation" |
   "close_incident_gated" | "complete_work_order" |
@@ -109,6 +114,7 @@ from grid_triage.access import (
     SURFACE_DENIAL_LOG,
     SURFACE_ETR,
     SURFACE_FIELD_UPDATES,
+    SURFACE_QUARANTINE,
     SURFACE_INCIDENT,
     SURFACE_MEMORY,
     SURFACE_OVERSIGHT,
@@ -135,6 +141,7 @@ from grid_triage.models import Alarm
 from grid_triage.oversight import OversightRefusal
 from grid_triage.packs import PackRefusal
 from grid_triage.restoration import RestorationRefusal
+from grid_triage.quarantine import QuarantineRefusal
 from grid_triage.revisions import RevisionRefusal, TopologyRefusal, UpdateRefusal
 from grid_triage.services import DuplicateAlarm
 from grid_triage.severity import SeverityRefusal
@@ -717,6 +724,38 @@ def handle_invocation(payload: dict, session_id: str | None = None) -> dict:
                 for u in svc.updates.list_updates(incident_id)
             ],
         }
+    if action == "get_quarantine":
+        incident_id = payload["incident_id"]
+        if svc.store.get_incident(incident_id) is None or hidden(
+            incident_id, SURFACE_QUARANTINE
+        ):
+            return {"status": "no_such_incident", "incident_id": incident_id}
+        body = svc.quarantine.incident_view(incident_id)
+        return {"status": "ok", **body}
+    if action == "release_quarantine":
+        hold_id = payload["hold_id"]
+        released_at = now
+        if payload.get("released_at"):
+            released_at = datetime.fromisoformat(payload["released_at"])
+        try:
+            release = svc.quarantine.release(
+                hold_id,
+                payload.get("released_by", ""),
+                payload.get("role", ""),
+                released_at,
+                principal=principal,
+            )
+        except AccessDeniedError as exc:
+            return denied_body(exc)
+        except KeyError:
+            return {"status": "no_such_hold", "hold_id": hold_id}
+        except QuarantineRefusal as exc:
+            return {
+                "status": "refused",
+                "hold_id": hold_id,
+                "problems": exc.problems,
+            }
+        return {"status": "released", "release": release.model_dump(mode="json")}
     if action == "declare_topology":
         declared_at = now
         if payload.get("declared_at"):
