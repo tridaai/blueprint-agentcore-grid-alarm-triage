@@ -252,6 +252,33 @@ counter is zero-tolerance unless marked otherwise:
                                  the pack does not grant the close
                                  (RT-17)
 
+Round 12 counters:
+  handover_storm_flag_errors     a storm declared after a
+                                 handover that is not flagged on
+                                 its read surface, or that stales
+                                 the artefact or blocks its
+                                 acceptance (RT-15)
+  span_cap_errors                a member beyond the correlation
+                                 pack's four-hour span cap, or a
+                                 cap refusal without its named
+                                 reason (RT-16)
+  pack_v1_reperformance_errors   the kept 2026.10.1 correlation
+                                 pack failing to re-perform the
+                                 ladder uncapped, as computed
+  report_verification_failures   an oversight report figure that
+                                 does not re-perform through the
+                                 independent path, or a report
+                                 section naming an incident
+  report_tamper_undetected       a forged report figure the
+                                 verifier does not name
+  empty_window_rate_errors       an empty-window rate printed
+                                 with a value, or a section not
+                                 reading no-data
+  report_generation_denial_errors
+                                 report generation by a read-only
+                                 principal that lands, or whose
+                                 refusal is not on the denial log
+
 Run: uv run python evals/run_evals.py  (exit 0 = GATE: PASS)
 """
 
@@ -2113,7 +2140,153 @@ def main() -> int:
         r11_recorded - r11_expected_denials
     )
 
-    print("Evals — grid alarm triage agent (Rounds 1-11)")
+    # -- Round 12: the storm flag, the span cap, oversight ------
+    # RT-15: a storm declared after a handover is flagged on the
+    # read surface, derived alongside the artefact — the
+    # artefact itself neither stales nor blocks acceptance.
+    # RT-16: the correlation span cap under pack 2026.10.2, and
+    # the same ladder re-performing uncapped under 2026.10.1.
+    # Oversight: window reports re-perform figure for figure,
+    # a planted tamper is named, empty-window rates read
+    # no-data, and generation by a read-only principal is
+    # refused and recorded.
+    counters["handover_storm_flag_errors"] = 0
+    counters["span_cap_errors"] = 0
+    counters["pack_v1_reperformance_errors"] = 0
+    counters["report_verification_failures"] = 0
+    counters["report_tamper_undetected"] = 0
+    counters["empty_window_rate_errors"] = 0
+    counters["report_generation_denial_errors"] = 0
+    from grid_triage.correlation import (
+        CORRELATION_PACK_V1,
+        REASON_BEYOND_SPAN,
+        correlate as _correlate,
+    )
+    from grid_triage.models import Alarm as _Alarm
+    from grid_triage.models import OversightReport as _OversightReport
+    from grid_triage.oversight import fingerprint_of as _fingerprint_of
+    from grid_triage.topology import load_topology_file as _load_topo
+
+    # RT-15 over the eval record.
+    r12_moment = T0 + timedelta(days=40)
+    r12_handover = svc.handover.assemble("op.dana", "operator", r12_moment)
+    svc.storm.declare(
+        "op.dana", "operator", "Eval cell", r12_moment + timedelta(hours=1),
+        feeders=["FDR-03"],
+    )
+    r12_view = svc.handover.view(r12_handover)
+    if not r12_view["storm_position_moved"]:
+        counters["handover_storm_flag_errors"] += 1
+    if len(r12_view["storm_acts_after_handover"]) != 1:
+        counters["handover_storm_flag_errors"] += 1
+    if svc.handover.verify(r12_handover.handover_id) != []:
+        counters["handover_storm_flag_errors"] += 1
+    try:
+        svc.handover.accept(
+            r12_handover.handover_id, "op.reyes", "operator",
+            r12_moment + timedelta(hours=2),
+        )
+    except Exception:
+        counters["handover_storm_flag_errors"] += 1
+
+    # RT-16: the ladder, under both pack versions.
+    def _ladder_alarm(aid, kind, at):
+        return _Alarm(
+            alarm_id=aid, stream_id="STREAM-SCADA-NORTH",
+            device_id="SEC-072" if kind == "voltage_sag" else "BRK-070",
+            feeder_id="FDR-07", kind=kind, severity="major",
+            raised_at=at, message=f"{kind} (eval ladder)",
+        )
+
+    _view = TopologyView(_load_topo("v1"))
+    _ladder = [_ladder_alarm("A1", "breaker_trip", T0)]
+    _t = T0
+    for _i in range(33):
+        _t += timedelta(minutes=9)
+        _ladder.append(_ladder_alarm(f"B{_i}", "voltage_sag", _t))
+    _capped = _correlate(
+        _ladder, _view, incident_id_for=lambda a: f"INC-{a.alarm_id}"
+    )
+    _members = {
+        m.alarm_id for m in _capped.memberships if m.incident_id == "INC-A1"
+    }
+    _last = max(a.raised_at for a in _ladder if a.alarm_id in _members)
+    if _last > T0 + timedelta(hours=4):
+        counters["span_cap_errors"] += 1
+    if _capped.uncorrelated_reasons.get("B26") != REASON_BEYOND_SPAN:
+        counters["span_cap_errors"] += 1
+    _legacy = _correlate(
+        _ladder, _view, CORRELATION_PACK_V1,
+        incident_id_for=lambda a: f"INC-{a.alarm_id}",
+    )
+    _legacy_members = {
+        m.alarm_id for m in _legacy.memberships if m.incident_id == "INC-A1"
+    }
+    if _legacy_members != {a.alarm_id for a in _ladder}:
+        counters["pack_v1_reperformance_errors"] += 1
+
+    # Oversight over the eval record.
+    r12_start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    r12_end = datetime(2027, 6, 1, tzinfo=timezone.utc)
+    r12_at = datetime(2027, 6, 2, tzinfo=timezone.utc)
+    r12_report = svc.oversight.generate(
+        "op.dana", "operator", r12_start, r12_end, r12_at
+    )
+    counters["report_verification_failures"] += len(
+        svc.oversight.verify_report(r12_report.report_id)
+    )
+    _blob = json.dumps(r12_report.sections)
+    for _incident in svc.store.list_incidents():
+        if _incident.incident_id in _blob:
+            counters["report_verification_failures"] += 1
+    _forged_sections = copy.deepcopy(r12_report.sections)
+    _forged_sections["incident_volumes"]["total"] += 1
+    svc.store.add_oversight_report(
+        _OversightReport(
+            report_id="REPORT-evalforged001",
+            pack_version=r12_report.pack_version,
+            generated_by="op.dana",
+            role="operator",
+            window_start=r12_start,
+            window_end=r12_end,
+            generated_at=r12_at,
+            sections=_forged_sections,
+            fingerprint=_fingerprint_of(
+                r12_report.pack_version, r12_start, r12_end, _forged_sections
+            ),
+        )
+    )
+    _tamper_problems = svc.oversight.verify_report("REPORT-evalforged001")
+    if not any("incident_volumes" in p for p in _tamper_problems):
+        counters["report_tamper_undetected"] += 1
+    r12_empty = svc.oversight.generate(
+        "op.dana", "operator",
+        datetime(2028, 1, 1, tzinfo=timezone.utc),
+        datetime(2028, 1, 2, tzinfo=timezone.utc),
+        datetime(2028, 1, 3, tzinfo=timezone.utc),
+    )
+    for _section in r12_empty.sections.values():
+        if _section.get("population") != "no_data":
+            counters["empty_window_rate_errors"] += 1
+        for _value in _section.values():
+            if isinstance(_value, dict) and "value" in _value:
+                if _value["value"] is not None:
+                    counters["empty_window_rate_errors"] += 1
+    if svc.oversight.verify_report(r12_empty.report_id):
+        counters["empty_window_rate_errors"] += 1
+    _denials_before = svc.store.count_access_denials()
+    try:
+        svc.oversight.generate(
+            "qa.ives", "operator", r12_start, r12_end, r12_at,
+            principal=r11_auditor,
+        )
+        counters["report_generation_denial_errors"] += 1
+    except AccessDeniedError:
+        pass
+    if svc.store.count_access_denials() != _denials_before + 1:
+        counters["report_generation_denial_errors"] += 1
+
+    print("Evals — grid alarm triage agent (Rounds 1-12)")
     for name, value in counters.items():
         print(f"  {name}: {value} (required 0)")
     failed = [n for n, v in counters.items() if v != 0]
