@@ -410,6 +410,26 @@ with the existence hiding every incident surface carries. The
 gateway holds no tool shapes: it routes a draft-shaped call
 and writes its own ledger, so Law 1's catalogue is unchanged.
 
+**The injection quarantine (Round 14)** screens the two
+channels that carry free text from outside the control room —
+field update notes and findings at the field door, alarm
+messages at the ingest door — against a versioned rule pack
+before anything is stored. A tripped text becomes an
+insert-only hold (migration 0013) and the artefact it arrived
+on is stored with the field absent: derivations fold it
+exactly as if it had never arrived (the restoration crew
+class reads the release acts, so a released note counts
+again), and the assembler's facts never carry it — for alarm
+messages, not even after release, since release governs
+human visibility of machine text, not its readmission to a
+prompt. Standing holds render only as escaped, data-only
+strings on the access pack's `quarantine` surface; release is
+a named reviewer's act, refused to the text's own reporter.
+`scripts/check_quarantine.py` grades the whole claim from the
+record, auditing the gateway's prompts through a recording
+port. The book screens text at the doors; it holds no tool
+shapes and operates nothing.
+
 ## Stores
 
 One store port, two dialects (`grid_triage/store.py`): SQLite

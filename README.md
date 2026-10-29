@@ -646,6 +646,55 @@ what came back, or what it cost.
   hiding — answered exactly as a non-existent incident is
   answered, and recorded on the denial log.
 
+## What Round 14 builds
+
+Rounds 10–13 hardened derivations, identity and the model
+call. None of them screened the words. Two channels carry
+free text written outside the control room into this record,
+and both were consumed on trust: field update text — a crew
+note's mere presence satisfies the restoration class the
+gated close requires, and the text itself landed verbatim on
+the evidence chain — and alarm messages, which the assembler
+copies into the facts it hands the model. Round 14 is the
+injection quarantine both channels now pass through,
+recorded as RT-18 in `docs/red-team.md`.
+
+- **The screen (quarantine pack `2026.10.1`).** Instruction
+  shape is a closed, versioned vocabulary: override phrasing,
+  privileged-channel impersonation, directives quoting the
+  catalogue's own verbs at the record's objects, prompt
+  extraction, borrowed authority, and encoded payloads — the
+  rules run over the raw text and over any base64-decoded
+  view of it, so an instruction cannot be smuggled past the
+  screen in encoding. Ordinary operational prose trips none
+  of them; the whole pre-R14 corpus grades that every run.
+- **Held text is absent (migration 0013).** A tripped text
+  lands in the quarantine book as an insert-only hold — its
+  only home. The artefact it arrived on is stored with the
+  field as absent and the hold named in its place: a held
+  crew note does not satisfy the crew class, a held alarm
+  message never enters the assembler's facts, and the raw
+  text is on no evidence item. What is not held passes byte
+  for byte, exactly as before.
+- **Escaped views, named releases.** A standing hold is
+  visible only as escaped, data-only text (its JSON string
+  form) on the guarded `quarantine` surface — the shift
+  authorities and the auditor read it; dispatch and field
+  crews do not, and incident-scoped reads hide as every
+  incident surface hides. Release is a named reviewer's act
+  (operator or duty manager), never the text's own reporter,
+  insert-only like every act here; on release a field note
+  counts again in the restoration fold. An alarm message is
+  the stated exception: screened machine text never becomes
+  model context, released or not — release restores its
+  human readability, not its readmission to a prompt.
+- **The audit is a script.** `make quarantine-check` plants
+  both traps on the standard wiring and grades the claims
+  from the record: the holds, the escaped view, the release
+  discipline, the crew class unmoved then restored, and —
+  through a recording port behind the real gateway — that no
+  held text reached a model prompt, before or after release.
+
 ## Quick start
 
 ```bash
@@ -655,6 +704,7 @@ make test             # pytest
 make evals            # the eval gate (zero-tolerance counters)
 make reports-check    # the oversight report check (plants forgeries)
 make ledger-check     # the model ledger check (plants a tamper)
+make quarantine-check # the quarantine check (plants trapped text)
 make serve            # AgentCore Runtime app on :8080
 make api              # operations API on :8000
 make invoke           # local in-process invoke of the agent step
@@ -788,6 +838,20 @@ What is built and what is not, plainly:
   remains fail-closed and stub-tested, and the gateway records
   its refusal as an errored call rather than letting any path
   proceed unpriced.
+- **The quarantine screens text, not people (Round 14).**
+  The screen is a stated pattern pack, not a judgement of the
+  reporter: a held note is a routing event, not an accusation
+  — the text waits, escaped, for a second person's release,
+  and the update itself (its reporter, kind and moment) is on
+  the record throughout. The pack will have false positives
+  by construction (a crew note that quotes an instruction is
+  held like one that gives it) and false negatives by
+  limitation (instruction shape is a vocabulary, not a proof
+  — text that trips nothing is consumed as before). Staff
+  text written under a judged act by a control-room role —
+  an operator note on a work order, a closure's resolution
+  summary — is attributed by its act and is not screened;
+  the book governs the two outside channels only.
 
 ## Layout
 
@@ -799,17 +863,19 @@ src/grid_triage/   models, topology, correlation, services (ingest),
                    revisions (R6), restoration (R7), storm (R8),
                    board / handover / static console (R9),
                    access (R11), oversight (R12),
-                   model_gateway (R13), runtime_app / runtime_main
+                   model_gateway (R13), quarantine (R14),
+                   runtime_app / runtime_main
                    (AgentCore Runtime),
                    api, demo, cli, local_invoke, wiring, config
 data/topology/     versioned territory data (v1.json, v2.json)
 data/roster/       versioned crew roster artefact (v1.json)
 migrations/        numbered SQL migrations, sqlite + postgres trees
-tests/             pytest suite (258 tests through R13)
+tests/             pytest suite (273 tests through R14)
 evals/             the eval gate (run_evals.py)
 scripts/           check_console.py — the console correctness check
                    check_reports.py — the oversight report check
                    check_model_ledger.py — the model ledger check
+                   check_quarantine.py — the quarantine context audit
 docs/              architecture.md — the honest AgentCore mapping
 ```
 
