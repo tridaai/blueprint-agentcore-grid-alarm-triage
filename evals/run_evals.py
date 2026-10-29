@@ -1,4 +1,4 @@
-"""Eval gate — Rounds 1–10 (grid alarm triage agent).
+"""Eval gate — Rounds 1–11 (grid alarm triage agent).
 
 Runs the planted streams through the real service graph on a
 throwaway SQLite store and grades the R1–R5 guarantees. Every
@@ -225,6 +225,32 @@ counter is zero-tolerance unless marked otherwise:
   control_surfaces_present       the console page carrying a
                                  form, a POST, a second fetch, or a
                                  control verb anywhere in its file
+  cross_scope_reads              a principal-carrying read the
+                                 access pack grants beyond the
+                                 caller's scope (a crew principal
+                                 reaching an incident surface, a
+                                 dispatcher reaching the denial
+                                 log)
+  existence_leaks                a surface answer that lets an
+                                 out-of-scope principal tell a
+                                 real incident from an invented
+                                 one (the Runtime's answers for
+                                 the flood and a bogus id must be
+                                 the same body modulo the id)
+  denied_act_executions          an act a principal was refused
+                                 that nevertheless landed (the
+                                 auditor declaring a storm, a
+                                 dispatcher closing an incident)
+  unrecorded_denials             a refusal in this section that
+                                 is not on the denial log — the
+                                 recorded count must equal the
+                                 refused count exactly
+  ungated_surface_closures       a principal-carrying close on
+                                 the Round 4 closure surface that
+                                 lands without the Round 7 gate's
+                                 preconditions, or under a role
+                                 the pack does not grant the close
+                                 (RT-17)
 
 Run: uv run python evals/run_evals.py  (exit 0 = GATE: PASS)
 """
@@ -1962,7 +1988,132 @@ def main() -> int:
     except StormRefusal:
         pass
 
-    print("Evals — grid alarm triage agent (Rounds 1-10)")
+    # -- Round 11: access control, existence hiding, RT-17 -------
+    # The access pack judges principal-carrying calls: a role
+    # reads only its surfaces and performs only its acts, every
+    # refusal is on the denial log, incident reads are
+    # existence-hidden on the surfaces, and the Round 4 closure
+    # surface stands under the Round 7 gate's preconditions
+    # wherever a principal is carried (RT-17, closed by R11).
+    counters["cross_scope_reads"] = 0
+    counters["existence_leaks"] = 0
+    counters["denied_act_executions"] = 0
+    counters["unrecorded_denials"] = 0
+    counters["ungated_surface_closures"] = 0
+    from grid_triage.access import AccessDeniedError, Principal
+
+    r11_crew = Principal(id="crew.lee", role="field_crew")
+    r11_auditor = Principal(id="qa.ives", role="auditor")
+    r11_dispatcher = Principal(id="disp.ray", role="dispatcher")
+    r11_operator = Principal(id="op.dana", role="operator")
+    r11_denials_before = svc.store.count_access_denials()
+    r11_expected_denials = 0
+    # Cross-scope reads at the judge itself: a crew principal
+    # reaching for an incident surface is refused hidden; a
+    # dispatcher reaching for the denial log is refused.
+    try:
+        svc.access.require_incident_read(
+            r11_crew, "severity", incident_id="INC-ALM-FLD-001"
+        )
+        counters["cross_scope_reads"] += 1
+    except AccessDeniedError as exc:
+        r11_expected_denials += 1
+        if not exc.hidden:
+            counters["existence_leaks"] += 1
+    try:
+        svc.access.require_read(r11_dispatcher, "denial_log")
+        counters["cross_scope_reads"] += 1
+    except AccessDeniedError:
+        r11_expected_denials += 1
+    # Existence on a real surface: the Runtime's answers for an
+    # out-of-scope principal must be the action's own
+    # no-such-incident body for the real flood and an invented
+    # id alike. (The bogus id short-circuits on existence before
+    # the hiding check, so only the real id's refusal records.)
+    import grid_triage.runtime_app as runtime_app
+
+    runtime_app._services = svc
+    for r11_action in ("get_severity", "get_etr", "get_work_order"):
+        r11_real = runtime_app.handle_invocation(
+            {
+                "action": r11_action,
+                "incident_id": "INC-ALM-FLD-001",
+                "principal": {"id": "crew.lee", "role": "field_crew"},
+            }
+        )
+        r11_bogus = runtime_app.handle_invocation(
+            {
+                "action": r11_action,
+                "incident_id": "INC-NOPE-404",
+                "principal": {"id": "crew.lee", "role": "field_crew"},
+            }
+        )
+        r11_expected_denials += 1
+        if r11_real != {
+            "status": "no_such_incident",
+            "incident_id": "INC-ALM-FLD-001",
+        } or r11_bogus != {
+            "status": "no_such_incident",
+            "incident_id": "INC-NOPE-404",
+        }:
+            counters["existence_leaks"] += 1
+    # Denied acts execute nothing: the auditor declares no
+    # storm; a dispatcher closes nothing, gated or otherwise.
+    r11_decl_before = len(svc.store.list_storm_declarations())
+    try:
+        svc.storm.declare(
+            "qa.ives", "operator", "eval probe",
+            T0 + timedelta(days=3), principal=r11_auditor,
+        )
+        counters["denied_act_executions"] += 1
+    except AccessDeniedError:
+        r11_expected_denials += 1
+    if len(svc.store.list_storm_declarations()) != r11_decl_before:
+        counters["denied_act_executions"] += 1
+    try:
+        svc.restoration.close_incident(
+            "INC-ALM-R6-001", "disp.ray", "dispatcher",
+            T0 + timedelta(days=3), "eval probe",
+            recorded_at=T0 + timedelta(days=3),
+            principal=r11_dispatcher,
+        )
+        counters["denied_act_executions"] += 1
+    except AccessDeniedError:
+        r11_expected_denials += 1
+    if svc.store.get_incident_closure("INC-ALM-R6-001") is not None:
+        counters["denied_act_executions"] += 1
+    # RT-17: a carried close on the Round 4 surface refuses
+    # where the gate's preconditions are unmet (the R6 incident
+    # has no confirmation of record), and a wrong-role principal
+    # is an access denial — neither lands a closure.
+    try:
+        svc.closure.close_incident(
+            "INC-ALM-R6-001", "op.dana", "operator",
+            T0 + timedelta(days=3), "eval probe",
+            T0 + timedelta(days=3, hours=1), principal=r11_operator,
+        )
+        counters["ungated_surface_closures"] += 1
+    except ClosureRefusal:
+        pass
+    try:
+        svc.closure.close_incident(
+            "INC-ALM-R6-001", "crew.lee", "field_crew",
+            T0 + timedelta(days=3), "eval probe",
+            T0 + timedelta(days=3, hours=1), principal=r11_crew,
+        )
+        counters["ungated_surface_closures"] += 1
+    except AccessDeniedError:
+        r11_expected_denials += 1
+    if svc.store.get_incident_closure("INC-ALM-R6-001") is not None:
+        counters["ungated_surface_closures"] += 1
+    # Every refusal in this section is on the log — the recorded
+    # count equals the refused count exactly.
+    r11_recorded = svc.store.count_access_denials() - r11_denials_before
+    counters["unrecorded_denials"] += abs(
+        r11_recorded - r11_expected_denials
+    )
+
+    print("Evals — grid alarm triage agent (Rounds 1-11)")
     for name, value in counters.items():
         print(f"  {name}: {value} (required 0)")
     failed = [n for n, v in counters.items() if v != 0]

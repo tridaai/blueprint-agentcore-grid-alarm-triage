@@ -617,6 +617,47 @@ def run_demo(settings: Settings | None = None) -> Services:
     )
     ledger = svc.closure.accuracy_ledger()
     print(f"ETR accuracy by operating mode: {ledger['by_operating_mode']}")
+
+    # Round 11: who is calling is now a recorded question. A
+    # field crew principal holds its work orders and nothing
+    # else — the flood's incident file is hidden from it, and
+    # the refusal is on the denial log; the auditor reads the
+    # log but performs no acts.
+    from grid_triage.access import AccessDeniedError
+
+    crew = svc.access.authenticate(
+        {"id": "crew.lee", "role": "field_crew"}, surface="demo"
+    )
+    try:
+        svc.access.require_incident_read(
+            crew, "incident", incident_id=flood.incident_id
+        )
+        print("ERROR: a crew principal read the incident file")
+    except AccessDeniedError as exc:
+        print(
+            f"Access: crew principal {crew.id} is refused the "
+            f"incident file ({exc.reason}) — answered as a "
+            "non-existent incident; the refusal is recorded."
+        )
+    auditor = svc.access.authenticate(
+        {"id": "qa.ives", "role": "auditor"}, surface="demo"
+    )
+    try:
+        svc.storm.declare(
+            "qa.ives",
+            "operator",
+            "An auditor declares nothing",
+            storm_day + timedelta(hours=12),
+            principal=auditor,
+        )
+        print("ERROR: an auditor act was accepted")
+    except AccessDeniedError as exc:
+        print(
+            f"Access: auditor act refused ({exc.reason}); the "
+            f"denial log now holds {svc.store.count_access_denials()} "
+            "recorded refusals, readable by the auditor and the "
+            "duty manager."
+        )
     return svc
 
 
