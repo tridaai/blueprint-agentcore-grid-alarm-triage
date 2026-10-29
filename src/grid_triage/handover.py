@@ -31,6 +31,26 @@ the record the hash covers. Two disciplines follow:
   and accepting write only the handover and acceptance rows;
   no incident, order, estimate or act underneath changes.
 
+**Round 12 — the storm position since the handover (RT-15).**
+The storm section above is the fold at the handover's own
+moment, and that is deliberate: a handover assembled during a
+storm must not go stale the moment the window stands down, so
+the section is never re-performed live and post-handover
+declarations never drift the artefact or block its acceptance.
+But a storm declared *after* assembly was invisible on the
+acceptance surface — the incoming operator could accept a
+handover reading "no storm" while a storm was now in force.
+The read surface now carries a **derived flag** alongside the
+artefact: the storm acts whose ``declared_at`` postdates the
+handover's moment, listed as recorded, and a boolean naming
+that the storm position has moved. Derived means exactly
+that: computed at read time from the declaration acts, never
+stored on the artefact, never folded into the record hash,
+never part of verification. (An act *backdated* to before the
+handover's moment is a different case and needs no flag: it
+changes the fold at that moment, so the storm section itself
+fails to recompute and the existing drift path names it.)
+
 Assembling the same record again for the same operator is a
 no-op returning the standing artefact (the severity/review
 discipline); a different record produces the next artefact in
@@ -259,10 +279,41 @@ class HandoverService:
             )
         return problems
 
+    # -- the derived storm flag (Round 12, RT-15) ------------------
+    def storm_acts_after(self, handover: ShiftHandover) -> list[dict]:
+        """The storm acts recorded against a moment after the
+        handover's own — the declarations the artefact's storm
+        section, folded at its moment, cannot contain. A read
+        over the declaration acts, in declared order; nothing
+        here is stored and nothing here judges the artefact."""
+        acts = [
+            act
+            for act in self.store.list_storm_declarations()
+            if act.declared_at > handover.handed_over_at
+        ]
+        acts.sort(key=lambda a: (a.declared_at, a.declaration_id))
+        return [
+            {
+                "declaration_id": act.declaration_id,
+                "kind": act.kind,
+                "declared_at": act.declared_at.isoformat(),
+                "declared_by": act.declared_by,
+                "feeders": list(act.feeders),
+                "region": act.region,
+                "opens_declaration_id": act.opens_declaration_id,
+            }
+            for act in acts
+        ]
+
     def view(self, handover: ShiftHandover) -> dict:
         """The surface shape: the artefact, its acceptance, and
         its staleness — computed live, so a handover over a
-        moved record is stale on its face."""
+        moved record is stale on its face. Round 12 adds the
+        derived storm flag alongside the artefact: the storm
+        acts declared after the handover's moment, shown so an
+        accepting operator sees the position that has moved —
+        shown, never folded into the artefact, its hash or its
+        verification (RT-15)."""
         problems = self.verify(handover.handover_id)
         acceptance = self.acceptance_for(handover.handover_id)
         body = handover.model_dump(mode="json")
@@ -271,6 +322,9 @@ class HandoverService:
         )
         body["stale"] = bool(problems)
         body["drift"] = problems
+        later_storm_acts = self.storm_acts_after(handover)
+        body["storm_acts_after_handover"] = later_storm_acts
+        body["storm_position_moved"] = bool(later_storm_acts)
         return body
 
     def latest_view(self) -> dict | None:
