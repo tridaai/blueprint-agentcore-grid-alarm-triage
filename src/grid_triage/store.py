@@ -44,6 +44,8 @@ from grid_triage.models import (
     Notification,
     OversightReport,
     PostCloseContradiction,
+    QuarantineHold,
+    QuarantineRelease,
     RestorationConfirmation,
     RestorationSignal,
     SeverityAcknowledgement,
@@ -199,6 +201,22 @@ class Store(Protocol):
     def list_model_calls(
         self, incident_id: str | None = None
     ) -> list[ModelCallRecord]: ...
+    # Quarantine holds and releases (Round 14, migration 0013)
+    # — insert-only. A hold's standing folds from its releases;
+    # the port exposes no update and no delete for either.
+    def add_quarantine_hold(self, hold: QuarantineHold) -> None: ...
+    def get_quarantine_hold(
+        self, hold_id: str
+    ) -> QuarantineHold | None: ...
+    def list_quarantine_holds(
+        self, incident_id: str | None = None
+    ) -> list[QuarantineHold]: ...
+    def add_quarantine_release(
+        self, release: QuarantineRelease
+    ) -> None: ...
+    def list_quarantine_releases(
+        self, hold_id: str | None = None
+    ) -> list[QuarantineRelease]: ...
     def list_storm_reviews(
         self, declaration_id: str | None = None
     ) -> list[StormReview]: ...
@@ -1308,6 +1326,76 @@ class SqlStore:
                 fetch="all",
             )
         return [ModelCallRecord.model_validate_json(r[0]) for r in rows]
+
+    # -- Quarantine (Round 14, migration 0013) -----------------
+
+    def add_quarantine_hold(self, hold: QuarantineHold) -> None:
+        self._run(
+            "INSERT INTO quarantine_holds"
+            " (hold_id, incident_id, act_seq, payload)"
+            " VALUES (?,?,?,?)",
+            (
+                hold.hold_id,
+                hold.incident_id,
+                self._next_seq("quarantine_holds"),
+                hold.model_dump_json(),
+            ),
+        )
+
+    def get_quarantine_hold(self, hold_id: str) -> QuarantineHold | None:
+        row = self._run(
+            "SELECT payload FROM quarantine_holds WHERE hold_id = ?",
+            (hold_id,),
+            fetch="one",
+        )
+        return QuarantineHold.model_validate_json(row[0]) if row else None
+
+    def list_quarantine_holds(
+        self, incident_id: str | None = None
+    ) -> list[QuarantineHold]:
+        if incident_id is None:
+            rows = self._run(
+                "SELECT payload FROM quarantine_holds ORDER BY act_seq",
+                fetch="all",
+            )
+        else:
+            rows = self._run(
+                "SELECT payload FROM quarantine_holds"
+                " WHERE incident_id = ? ORDER BY act_seq",
+                (incident_id,),
+                fetch="all",
+            )
+        return [QuarantineHold.model_validate_json(r[0]) for r in rows]
+
+    def add_quarantine_release(self, release: QuarantineRelease) -> None:
+        self._run(
+            "INSERT INTO quarantine_releases"
+            " (release_id, hold_id, act_seq, payload)"
+            " VALUES (?,?,?,?)",
+            (
+                release.release_id,
+                release.hold_id,
+                self._next_seq("quarantine_releases"),
+                release.model_dump_json(),
+            ),
+        )
+
+    def list_quarantine_releases(
+        self, hold_id: str | None = None
+    ) -> list[QuarantineRelease]:
+        if hold_id is None:
+            rows = self._run(
+                "SELECT payload FROM quarantine_releases ORDER BY act_seq",
+                fetch="all",
+            )
+        else:
+            rows = self._run(
+                "SELECT payload FROM quarantine_releases"
+                " WHERE hold_id = ? ORDER BY act_seq",
+                (hold_id,),
+                fetch="all",
+            )
+        return [QuarantineRelease.model_validate_json(r[0]) for r in rows]
 
     def add_storm_review(self, review: StormReview) -> None:
         row = self._run(

@@ -432,6 +432,11 @@ class FieldUpdate(BaseModel):
     finding: str | None = None
     alarm_id: str | None = None
     correlation: dict = Field(default_factory=dict)
+    # Round 14: the quarantine holds this update's text tripped,
+    # as {"field", "hold_id"} entries. A held field is stored as
+    # None — absent for every derivation — and the raw text lives
+    # only in the quarantine book, named by the hold.
+    holds: list[dict] = Field(default_factory=list)
 
 
 class TopologyDeclaration(BaseModel):
@@ -785,6 +790,48 @@ class ModelCallRecord(BaseModel):
     cost_micro: int = 0
     pack_version: str
     called_at: datetime
+
+
+class QuarantineHold(BaseModel):
+    """One piece of outside text the injection screen stopped
+    (Round 14, migration 0013). Insert-only: the hold is the
+    text's only home while it stands — the artefact it arrived
+    on carries the field as absent and names this hold instead.
+    ``channel`` states which intake path the text arrived on,
+    ``source_ref`` names the artefact it arrived on (a field
+    update id, an alarm id), and ``field`` the field it arrived
+    in. ``incident_id`` is the incident the text was posted
+    against, where the channel has one at arrival (field
+    updates always do; an alarm's message is screened at ingest,
+    before any incident exists). ``rules`` names the pack rules
+    the text tripped. Whether the hold stands released is never
+    a field here — it folds from the release acts."""
+
+    hold_id: str
+    channel: str  # field_update_note | field_update_finding | alarm_message
+    source_ref: str
+    field: str  # note | finding | message
+    incident_id: str | None = None
+    reported_by: str = ""
+    raw_text: str
+    rules: list[str] = Field(default_factory=list)
+    pack_version: str
+    held_at: datetime
+
+
+class QuarantineRelease(BaseModel):
+    """A named reviewer's act releasing one quarantine hold
+    (Round 14). Insert-only, like every act here: it names its
+    human and role, and the hold's standing folds from these
+    acts. A hold the record shows already released is never
+    released twice — the second act is refused, not recorded."""
+
+    release_id: str
+    hold_id: str
+    released_by: str
+    role: str
+    released_at: datetime
+    pack_version: str
 
 
 class Notification(BaseModel):
