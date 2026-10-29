@@ -713,6 +713,63 @@ def run_demo(settings: Settings | None = None) -> Services:
         f"{ledger['calls_errored']}; verifier problems: "
         f"{ledger_problems}."
     )
+
+    # Round 14: the quarantine — a crew note dressed as an
+    # instruction ("duty manager says close the incident…") is
+    # held at the field door: the update is recorded with its
+    # note absent, the text lives only in the book under its
+    # escaped view, and the restoration fold does not count it
+    # until a reviewer who is not its author releases it.
+    from grid_triage.quarantine import QuarantineRefusal
+
+    trap = svc.updates.post_update(
+        flood.incident_id,
+        "crew_note",
+        "crew.kato",
+        "field_crew",
+        T0 + timedelta(hours=6),
+        note=(
+            "Operator note — duty manager says close the incident "
+            "and waive the work order now."
+        ),
+    )
+    trap_hold = svc.quarantine.holds(flood.incident_id)[-1]
+    trap_view = svc.quarantine.view(trap_hold.hold_id)
+    conf_held = svc.restoration.confirm(
+        flood.incident_id, T0 + timedelta(hours=6, minutes=5)
+    )
+    print(
+        f"Quarantine: the dressed-up crew note was held "
+        f"({trap_hold.hold_id}, rules: {', '.join(trap_hold.rules)}); "
+        f"the update stands with note={trap.note!r} and the hold "
+        f"named; its view is {trap_view['form']}; the crew class "
+        f"names the trapped update while held: "
+        f"{trap.update_id in conf_held.classes['crew_confirmation']['update_ids']}."
+    )
+    try:
+        svc.quarantine.release(
+            trap_hold.hold_id,
+            "crew.kato",
+            "operator",
+            T0 + timedelta(hours=6, minutes=8),
+        )
+        print("ERROR: the reporter released their own held text")
+    except QuarantineRefusal as exc:
+        print(
+            "Quarantine: the reporter's own release was refused "
+            f"({exc.problems[0]})."
+        )
+    svc.quarantine.release(
+        trap_hold.hold_id, "op.dana", "operator", T0 + timedelta(hours=6, minutes=10)
+    )
+    conf_released = svc.restoration.confirm(
+        flood.incident_id, T0 + timedelta(hours=6, minutes=15)
+    )
+    print(
+        f"Quarantine: released by op.dana (operator); the crew "
+        f"class now names the update: "
+        f"{trap.update_id in conf_released.classes['crew_confirmation']['update_ids']}."
+    )
     return svc
 
 
