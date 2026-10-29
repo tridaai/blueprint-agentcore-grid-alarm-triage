@@ -14,6 +14,7 @@ from grid_triage.agent import (
     IncidentAssembler,
     PriorAttributionRefusal,
 )
+from grid_triage.correlation import CORRELATION_PACK
 from grid_triage.models import BriefStatement, Citation
 from grid_triage.packs import PackRefusal, manifest_hash
 from grid_triage.seed import T0
@@ -46,7 +47,11 @@ def test_seal_builds_the_full_manifest(briefed):
     ):
         assert types.count(expected) == 1
     corr = next(m for m in pack.members if m["type"] == "correlation_decisions")
-    assert corr["correlation_pack_version"] == "2026.10.1"
+    # The manifest records the pack version the incident was
+    # correlated under — the current pack (2026.10.2 since
+    # Round 12's span-cap revision; the literal moved with the
+    # pack, deliberately).
+    assert corr["correlation_pack_version"] == CORRELATION_PACK["version"]
     priors = next(m for m in pack.members if m["type"] == "priors")
     seeded = {r.incident_id: r.record_id for r in briefed.memory_port.list_records()}
     assert [e["record_id"] for e in priors["records"]] == [

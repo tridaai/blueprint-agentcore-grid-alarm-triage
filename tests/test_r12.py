@@ -177,11 +177,19 @@ def test_rt16_the_ladder_is_capped_at_four_hours_from_the_anchor():
 
 def test_rt16_an_anchor_beyond_the_cap_opens_its_own_incident():
     view = TopologyView(load_topology_file("v1"))
-    alarms = _ladder(count=30)  # chain reaches T0+270m, inside the cap
-    # A trip nine minutes past the chain's end: the window
-    # reaches it, the cap refuses the join.
-    late = T0 + timedelta(minutes=279)
-    alarms.append(_alarm("A3", "BRK-070", "FDR-07", "breaker_trip", late))
+    # A chain that stays inside the cap (last sag at +234m),
+    # then a trip nine minutes past its end: the nearest-member
+    # window reaches the standing incident, but the trip lies
+    # 243 minutes from its anchor — the cap alone refuses the
+    # anchor-join, so the trip founds its own incident.
+    alarms = [_alarm("A1", "BRK-070", "FDR-07", "breaker_trip", T0)]
+    t = T0
+    for i in range(26):
+        t += timedelta(minutes=9)
+        alarms.append(_alarm(f"B{i}", "SEC-072", "FDR-07", "voltage_sag", t))
+    alarms.append(
+        _alarm("A3", "BRK-070", "FDR-07", "breaker_trip", t + timedelta(minutes=9))
+    )
     result = correlate(alarms, view, incident_id_for=lambda a: f"INC-{a.alarm_id}")
     a3 = next(i for i in result.incidents if i.incident_id == "INC-A3")
     assert a3.anchor_alarm_id == "A3"
@@ -191,6 +199,11 @@ def test_rt16_an_anchor_beyond_the_cap_opens_its_own_incident():
         if m.incident_id == "INC-A3"
     }
     assert rules == {"A3": "anchor"}
+    # And the standing incident kept the whole chain.
+    a1_members = {
+        m.alarm_id for m in result.memberships if m.incident_id == "INC-A1"
+    }
+    assert a1_members == {a.alarm_id for a in alarms if a.alarm_id != "A3"}
 
 
 def test_rt16_the_kept_v1_pack_reperforms_uncapped():
@@ -259,7 +272,12 @@ def test_report_figures_are_hand_checkable(fed):
         "denominator": 2,
     }
     mix = report.sections["severity_mix"]
-    assert mix["by_band"] == {"SEV-1": 1, "UNASSESSED": 1}
+    # The flood's head is the SEV-1 assessed above; the lone's
+    # head is the SEV-3 the closure itself records when an
+    # incident closes (the Round 4 closure grades its incident
+    # into the record — probed: a fresh world has no assessment
+    # for the lone until it closes).
+    assert mix["by_band"] == {"SEV-1": 1, "SEV-3": 1}
     assert mix["sev1_rate"]["value"] == 0.5
     etr = report.sections["etr_accuracy"]
     assert etr["outcomes_recorded"] == 1

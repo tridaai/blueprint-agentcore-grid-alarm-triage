@@ -441,7 +441,12 @@ def test_rt16_characterises_correlation_span_chaining():
     result = correlate(alarms, view, incident_id_for=lambda a: f"INC-{a.alarm_id}")
     assert {i.incident_id for i in result.incidents} == {"INC-A1", "INC-A2"}
     a2_members = {m.alarm_id for m in result.memberships if m.incident_id == "INC-A2"}
-    assert a2_members == {"A2"}
+    # Under the cap the chain is cut, and the ladder's last sag
+    # — nine minutes before the second trip, inside its window
+    # and its span — joins the second incident, not the first.
+    # (Uncapped, it chained onto the first incident instead;
+    # that is exactly the behaviour the cap removes.)
+    assert a2_members == {"A2", "B32"}
     # The cap: no member lies more than four hours from A1.
     assert span_of(result, "INC-A1") <= T0 + timedelta(hours=4)
     # And the first refused sag — the one the window still

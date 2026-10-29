@@ -1,5 +1,6 @@
 """Correlation graded against the planted truth (Law 2)."""
 
+from grid_triage.correlation import CORRELATION_PACK
 from grid_triage.seed import FLOOD_ALARM_IDS, LONE_ALARM_IDS
 
 
@@ -26,7 +27,12 @@ def test_lone_trip_is_a_single_alarm_incident(fed):
 def test_every_membership_carries_a_rule_and_versions_are_pinned(fed):
     for incident in fed.store.list_incidents():
         assert incident.topology_version == "v1"
-        assert incident.correlation_pack_version == "2026.10.1"
+        # The stamp is the version of the pack the incident was
+        # correlated under — the current pack (2026.10.2 since
+        # Round 12's span-cap revision; the literal moved with
+        # the pack, deliberately, and 2026.10.1 correlations
+        # re-perform under the kept pack: tests/test_r12.py).
+        assert incident.correlation_pack_version == CORRELATION_PACK["version"]
         for membership in fed.store.list_memberships(incident.incident_id):
             assert membership.rule_id in {
                 "anchor",
