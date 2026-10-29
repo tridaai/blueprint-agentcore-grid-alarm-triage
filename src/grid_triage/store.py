@@ -1238,11 +1238,15 @@ class SqlStore:
 
     # -- Access denials (Round 11, migration 0010) ---------------
     def add_access_denial(self, denial: AccessDenial) -> None:
-        self._insert(
-            "access_denials",
-            denial.denial_id,
-            denial.model_dump(mode="json"),
-            table_seq="access_denials",
+        self._run(
+            "INSERT INTO access_denials"
+            " (denial_id, act_seq, payload)"
+            " VALUES (?,?,?)",
+            (
+                denial.denial_id,
+                self._next_seq("access_denials"),
+                denial.model_dump_json(),
+            ),
         )
 
     def count_access_denials(self) -> int:
