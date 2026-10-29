@@ -12,6 +12,17 @@ The agent itself is invoked through the AgentCore Runtime app
 tests can see and drive the triage work without an AWS account.
 Every route here is a read or an intake — there is no route that
 operates anything (Law 1).
+
+Round 11 adds principals. A request may carry a caller as
+`X-Principal-Id` / `X-Principal-Role` headers; the access pack
+(`grid_triage.access`) then judges the call — act routes pass
+the principal into the services, which record a denial before
+refusing; read routes honour existence hiding (an incident a
+role may not read answers byte-identically to a non-existent
+one) and list routes filter. A request with no principal
+headers is the trusted local path, as before. The pack itself
+is readable at /access/pack; the denial log at /access/denials
+(a guarded surface: auditor and duty_manager only).
 """
 
 from __future__ import annotations
@@ -19,11 +30,29 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from grid_triage import __version__
+from grid_triage.access import (
+    SURFACE_ALARMS,
+    SURFACE_CONSOLE,
+    SURFACE_DENIAL_LOG,
+    SURFACE_ETR,
+    SURFACE_FIELD_UPDATES,
+    SURFACE_INCIDENT,
+    SURFACE_MEMORY,
+    SURFACE_PACKS,
+    SURFACE_RESTORATION,
+    SURFACE_SEVERITY,
+    SURFACE_STORM,
+    SURFACE_TOPOLOGY,
+    SURFACE_WORK_ORDERS,
+    AccessDeniedError,
+    Principal,
+    access_pack_fingerprint,
+)
 from grid_triage.agent import (
     BandMismatchRefusal,
     CitationRefusal,
@@ -64,6 +93,94 @@ def override_services(services: Services) -> None:
     runtime_app._services = services
 
 
+# -- Round 11: principals --------------------------------------------
+# A request carries a principal as X-Principal-Id /
+# X-Principal-Role headers. No headers: the trusted local path
+# (None). A partial or malformed pair is authenticated — and
+# refused, recorded — exactly as the pack judges it: 401.
+
+
+def _principal(
+    request: Request, *, surface: str, target: str = ""
+) -> Principal | None:
+    principal_id = request.headers.get("x-principal-id")
+    role = request.headers.get("x-principal-role")
+    if principal_id is None and role is None:
+        return None
+    try:
+        return svc().access.authenticate(
+            {"id": principal_id, "role": role},
+            surface=surface,
+            target=target,
+        )
+    except AccessDeniedError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+
+def _forbidden(exc: AccessDeniedError) -> HTTPException:
+    return HTTPException(status_code=403, detail=str(exc))
+
+
+def _guard_incident(
+    request: Request,
+    incident_id: str,
+    surface: str,
+    not_found_detail: str | None = None,
+) -> Principal | None:
+    """Existence hiding for incident-scoped reads: a carried
+    principal whose role may not read incidents (or this
+    surface) gets the route's own not-found response — the same
+    status and body a non-existent incident earns on this
+    route, byte for byte. Returns the principal for the
+    caller's own use."""
+    principal = _principal(request, surface=surface, target=incident_id)
+    if principal is not None:
+        try:
+            svc().access.require_incident_read(
+                principal, surface, incident_id=incident_id
+            )
+        except AccessDeniedError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail=not_found_detail
+                or f"no such incident: {incident_id}",
+            ) from exc
+    return principal
+
+
+def _guard_surface(
+    request: Request,
+    surface: str,
+    not_found_detail: str | None = None,
+    target: str = "",
+) -> Principal | None:
+    """A read of a surface (or of a single resource on it). With
+    `not_found_detail`, an unreadable surface answers as the
+    resource's own not-found — the resource is hidden, not the
+    surface refused. Without it, the refusal is a plain 403."""
+    principal = _principal(request, surface=surface, target=target)
+    if principal is not None:
+        try:
+            svc().access.require_read(principal, surface, target=target)
+        except AccessDeniedError as exc:
+            if not_found_detail is not None:
+                raise HTTPException(
+                    status_code=404, detail=not_found_detail
+                ) from exc
+            raise _forbidden(exc) from exc
+    return principal
+
+
+def _list_visible(request: Request, surface: str) -> bool:
+    """List surfaces filter, never refuse: a carried principal
+    without the read sees an empty list; no principal (or a
+    readable one) sees the list."""
+    principal = _principal(request, surface=surface)
+    if principal is None:
+        return True
+    return svc().access.pack.can_read(principal.role, surface)
+
+
 class IngestResponse(BaseModel):
     ingested: int
     incidents_created: list[str]
@@ -81,10 +198,15 @@ def readiness() -> dict:
 
 
 @app.post("/ingest/feed", response_model=IngestResponse)
-def ingest_feed() -> IngestResponse:
+def ingest_feed(request: Request) -> IngestResponse:
     s = svc()
+    principal = _principal(request, surface=SURFACE_ALARMS)
     try:
-        count = s.intake.ingest_feed(s.feed.fetch_alarms())
+        count = s.intake.ingest_feed(
+            s.feed.fetch_alarms(), principal=principal
+        )
+    except AccessDeniedError as exc:
+        raise _forbidden(exc) from exc
     except DuplicateAlarm as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     created = s.correlator.correlate_new(s.topology)
@@ -94,10 +216,13 @@ def ingest_feed() -> IngestResponse:
 
 
 @app.post("/alarms", response_model=IngestResponse)
-def ingest_alarms(alarms: list[Alarm]) -> IngestResponse:
+def ingest_alarms(alarms: list[Alarm], request: Request) -> IngestResponse:
     s = svc()
+    principal = _principal(request, surface=SURFACE_ALARMS)
     try:
-        count = s.intake.ingest(alarms)
+        count = s.intake.ingest(alarms, principal=principal)
+    except AccessDeniedError as exc:
+        raise _forbidden(exc) from exc
     except DuplicateAlarm as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     created = s.correlator.correlate_new(s.topology)
@@ -107,14 +232,22 @@ def ingest_alarms(alarms: list[Alarm]) -> IngestResponse:
 
 
 @app.get("/alarms")
-def list_alarms(uncorrelated: bool = False) -> list[dict]:
+def list_alarms(request: Request, uncorrelated: bool = False) -> list[dict]:
     s = svc()
+    if not _list_visible(request, SURFACE_ALARMS):
+        return []
     alarms = s.store.list_uncorrelated_alarms() if uncorrelated else s.store.list_alarms()
     return [a.model_dump(mode="json") for a in alarms]
 
 
 @app.get("/alarms/{alarm_id}")
-def get_alarm(alarm_id: str) -> dict:
+def get_alarm(alarm_id: str, request: Request) -> dict:
+    _guard_surface(
+        request,
+        SURFACE_ALARMS,
+        not_found_detail=f"no such alarm: {alarm_id}",
+        target=alarm_id,
+    )
     alarm = svc().store.get_alarm(alarm_id)
     if alarm is None:
         raise HTTPException(status_code=404, detail=f"no such alarm: {alarm_id}")
@@ -126,12 +259,15 @@ def get_alarm(alarm_id: str) -> dict:
 
 
 @app.get("/incidents")
-def list_incidents() -> list[dict]:
+def list_incidents(request: Request) -> list[dict]:
+    if not _list_visible(request, SURFACE_INCIDENT):
+        return []
     return [i.model_dump(mode="json") for i in svc().store.list_incidents()]
 
 
 @app.get("/incidents/{incident_id}")
-def get_incident(incident_id: str) -> dict:
+def get_incident(incident_id: str, request: Request) -> dict:
+    _guard_incident(request, incident_id, SURFACE_INCIDENT)
     s = svc()
     incident = s.store.get_incident(incident_id)
     if incident is None:
@@ -148,12 +284,19 @@ def get_incident(incident_id: str) -> dict:
 
 
 @app.post("/incidents/{incident_id}/brief")
-def assemble_brief(incident_id: str) -> dict:
+def assemble_brief(incident_id: str, request: Request) -> dict:
     s = svc()
+    principal = _principal(
+        request, surface=SURFACE_INCIDENT, target=incident_id
+    )
     if s.store.get_incident(incident_id) is None:
         raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
     try:
-        brief = s.assembler.assemble(incident_id, datetime.now(timezone.utc))
+        brief = s.assembler.assemble(
+            incident_id, datetime.now(timezone.utc), principal=principal
+        )
+    except AccessDeniedError as exc:
+        raise _forbidden(exc) from exc
     except (
         CitationRefusal,
         BandMismatchRefusal,
@@ -168,17 +311,25 @@ def assemble_brief(incident_id: str) -> dict:
 
 
 @app.post("/incidents/{incident_id}/classify")
-def classify_incident(incident_id: str) -> dict:
+def classify_incident(incident_id: str, request: Request) -> dict:
     s = svc()
+    principal = _principal(
+        request, surface=SURFACE_INCIDENT, target=incident_id
+    )
     try:
-        classification = s.cause.classify(incident_id, datetime.now(timezone.utc))
+        classification = s.cause.classify(
+            incident_id, datetime.now(timezone.utc), principal=principal
+        )
+    except AccessDeniedError as exc:
+        raise _forbidden(exc) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return classification.model_dump(mode="json")
 
 
 @app.get("/incidents/{incident_id}/classification")
-def get_classification(incident_id: str) -> dict:
+def get_classification(incident_id: str, request: Request) -> dict:
+    _guard_incident(request, incident_id, SURFACE_INCIDENT)
     s = svc()
     if s.store.get_incident(incident_id) is None:
         raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
@@ -192,7 +343,13 @@ def get_classification(incident_id: str) -> dict:
 
 
 @app.get("/incidents/{incident_id}/priors")
-def get_priors(incident_id: str) -> dict:
+def get_priors(incident_id: str, request: Request) -> dict:
+    _guard_incident(
+        request,
+        incident_id,
+        SURFACE_MEMORY,
+        not_found_detail=str(KeyError(f"no such incident: {incident_id}")),
+    )
     s = svc()
     try:
         hits = s.memory.retrieve_for_incident(
@@ -207,18 +364,30 @@ def get_priors(incident_id: str) -> dict:
 
 
 @app.post("/memory/seed-history")
-def seed_history() -> dict:
-    records = svc().memory.load_history()
+def seed_history(request: Request) -> dict:
+    principal = _principal(request, surface=SURFACE_MEMORY)
+    try:
+        records = svc().memory.load_history(principal=principal)
+    except AccessDeniedError as exc:
+        raise _forbidden(exc) from exc
     return {"loaded": [r.record_id for r in records], "count": len(records)}
 
 
 @app.get("/memory/records")
-def list_memory_records() -> list[dict]:
+def list_memory_records(request: Request) -> list[dict]:
+    if not _list_visible(request, SURFACE_MEMORY):
+        return []
     return [r.model_dump(mode="json") for r in svc().memory_port.list_records()]
 
 
 @app.get("/memory/records/{record_id}")
-def get_memory_record(record_id: str) -> dict:
+def get_memory_record(record_id: str, request: Request) -> dict:
+    _guard_surface(
+        request,
+        SURFACE_MEMORY,
+        not_found_detail=f"no such memory record: {record_id}",
+        target=record_id,
+    )
     record = svc().memory_port.get_record(record_id)
     if record is None:
         raise HTTPException(status_code=404, detail=f"no such memory record: {record_id}")
@@ -230,12 +399,20 @@ class SealRequest(BaseModel):
 
 
 @app.post("/incidents/{incident_id}/pack/seal")
-def seal_pack(incident_id: str, request: SealRequest) -> dict:
+def seal_pack(incident_id: str, request: SealRequest, http_request: Request) -> dict:
     s = svc()
+    principal = _principal(
+        http_request, surface=SURFACE_PACKS, target=incident_id
+    )
     try:
         pack = s.packs.seal(
-            incident_id, request.sealed_by, datetime.now(timezone.utc)
+            incident_id,
+            request.sealed_by,
+            datetime.now(timezone.utc),
+            principal=principal,
         )
+    except AccessDeniedError as exc:
+        raise _forbidden(exc) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except PackRefusal as exc:
@@ -244,7 +421,8 @@ def seal_pack(incident_id: str, request: SealRequest) -> dict:
 
 
 @app.get("/incidents/{incident_id}/pack")
-def get_current_pack(incident_id: str) -> dict:
+def get_current_pack(incident_id: str, request: Request) -> dict:
+    _guard_incident(request, incident_id, SURFACE_PACKS)
     s = svc()
     if s.store.get_incident(incident_id) is None:
         raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
@@ -256,7 +434,8 @@ def get_current_pack(incident_id: str) -> dict:
 
 
 @app.get("/incidents/{incident_id}/packs")
-def list_packs(incident_id: str) -> dict:
+def list_packs(incident_id: str, request: Request) -> dict:
+    _guard_incident(request, incident_id, SURFACE_PACKS)
     s = svc()
     if s.store.get_incident(incident_id) is None:
         raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
@@ -267,7 +446,13 @@ def list_packs(incident_id: str) -> dict:
 
 
 @app.get("/packs/{pack_id}")
-def get_pack(pack_id: str) -> dict:
+def get_pack(pack_id: str, request: Request) -> dict:
+    _guard_surface(
+        request,
+        SURFACE_PACKS,
+        not_found_detail=f"no such evidence pack: {pack_id}",
+        target=pack_id,
+    )
     pack = svc().store.get_evidence_pack(pack_id)
     if pack is None:
         raise HTTPException(status_code=404, detail=f"no such evidence pack: {pack_id}")
@@ -275,7 +460,15 @@ def get_pack(pack_id: str) -> dict:
 
 
 @app.get("/packs/{pack_id}/verify")
-def verify_pack(pack_id: str) -> dict:
+def verify_pack(pack_id: str, request: Request) -> dict:
+    _guard_surface(
+        request,
+        SURFACE_PACKS,
+        not_found_detail=str(
+            KeyError(f"no such evidence pack: {pack_id}")
+        ),
+        target=pack_id,
+    )
     s = svc()
     try:
         problems = s.packs.verify_pack(pack_id)
@@ -289,7 +482,8 @@ class AssessRequest(BaseModel):
 
 
 @app.get("/incidents/{incident_id}/severity")
-def get_severity(incident_id: str) -> dict:
+def get_severity(incident_id: str, request: Request) -> dict:
+    _guard_incident(request, incident_id, SURFACE_SEVERITY)
     s = svc()
     if s.store.get_incident(incident_id) is None:
         raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
@@ -314,13 +508,22 @@ def get_severity(incident_id: str) -> dict:
 
 
 @app.post("/incidents/{incident_id}/severity/assess")
-def assess_severity(incident_id: str, request: AssessRequest | None = None) -> dict:
+def assess_severity(
+    incident_id: str,
+    http_request: Request,
+    request: AssessRequest | None = None,
+) -> dict:
     s = svc()
+    principal = _principal(
+        http_request, surface=SURFACE_SEVERITY, target=incident_id
+    )
     if s.store.get_incident(incident_id) is None:
         raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
     as_of = (request.as_of if request else None) or datetime.now(timezone.utc)
     try:
-        assessment = s.severity.assess(incident_id, as_of)
+        assessment = s.severity.assess(incident_id, as_of, principal=principal)
+    except AccessDeniedError as exc:
+        raise _forbidden(exc) from exc
     except SeverityRefusal as exc:
         raise HTTPException(status_code=422, detail={"problems": exc.problems}) from exc
     return assessment.model_dump(mode="json")
@@ -333,7 +536,8 @@ class AcknowledgeRequest(BaseModel):
 
 
 @app.get("/severity/acknowledgement-queue")
-def acknowledgement_queue() -> dict:
+def acknowledgement_queue(request: Request) -> dict:
+    _guard_surface(request, SURFACE_SEVERITY)
     s = svc()
     return {
         "pending": [
@@ -343,15 +547,25 @@ def acknowledgement_queue() -> dict:
 
 
 @app.post("/severity/acknowledgements")
-def acknowledge_severity(request: AcknowledgeRequest) -> dict:
+def acknowledge_severity(
+    request: AcknowledgeRequest, http_request: Request
+) -> dict:
     s = svc()
+    principal = _principal(
+        http_request,
+        surface=SURFACE_SEVERITY,
+        target=request.assessment_id,
+    )
     try:
         ack = s.severity.acknowledge(
             request.assessment_id,
             request.acknowledged_by,
             request.role,
             datetime.now(timezone.utc),
+            principal=principal,
         )
+    except AccessDeniedError as exc:
+        raise _forbidden(exc) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except SeverityRefusal as exc:
@@ -367,7 +581,8 @@ class EstimateRequest(BaseModel):
 
 
 @app.get("/incidents/{incident_id}/etr")
-def get_etr(incident_id: str) -> dict:
+def get_etr(incident_id: str, request: Request) -> dict:
+    _guard_incident(request, incident_id, SURFACE_ETR)
     s = svc()
     if s.store.get_incident(incident_id) is None:
         raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
@@ -380,20 +595,30 @@ def get_etr(incident_id: str) -> dict:
 
 
 @app.post("/incidents/{incident_id}/etr/estimate")
-def estimate_etr(incident_id: str, request: EstimateRequest | None = None) -> dict:
+def estimate_etr(
+    incident_id: str,
+    http_request: Request,
+    request: EstimateRequest | None = None,
+) -> dict:
     s = svc()
+    principal = _principal(
+        http_request, surface=SURFACE_ETR, target=incident_id
+    )
     if s.store.get_incident(incident_id) is None:
         raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
     as_of = (request.as_of if request else None) or datetime.now(timezone.utc)
     try:
-        estimate = s.etr.estimate(incident_id, as_of)
+        estimate = s.etr.estimate(incident_id, as_of, principal=principal)
+    except AccessDeniedError as exc:
+        raise _forbidden(exc) from exc
     except EtrRefusal as exc:
         raise HTTPException(status_code=422, detail={"problems": exc.problems}) from exc
     return estimate.model_dump(mode="json")
 
 
 @app.get("/roster")
-def get_roster() -> dict:
+def get_roster(request: Request) -> dict:
+    _guard_surface(request, SURFACE_TOPOLOGY)
     return svc().roster.payload
 
 
@@ -405,8 +630,13 @@ class CloseRequest(BaseModel):
 
 
 @app.post("/incidents/{incident_id}/close")
-def close_incident(incident_id: str, request: CloseRequest) -> dict:
+def close_incident(
+    incident_id: str, request: CloseRequest, http_request: Request
+) -> dict:
     s = svc()
+    principal = _principal(
+        http_request, surface=SURFACE_INCIDENT, target=incident_id
+    )
     try:
         closure, outcome, record = s.closure.close_incident(
             incident_id,
@@ -415,7 +645,10 @@ def close_incident(incident_id: str, request: CloseRequest) -> dict:
             request.restored_at,
             request.resolution_summary,
             datetime.now(timezone.utc),
+            principal=principal,
         )
+    except AccessDeniedError as exc:
+        raise _forbidden(exc) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ClosureRefusal as exc:
@@ -428,7 +661,8 @@ def close_incident(incident_id: str, request: CloseRequest) -> dict:
 
 
 @app.get("/incidents/{incident_id}/closure")
-def get_closure(incident_id: str) -> dict:
+def get_closure(incident_id: str, request: Request) -> dict:
+    _guard_incident(request, incident_id, SURFACE_INCIDENT)
     s = svc()
     if s.store.get_incident(incident_id) is None:
         raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
@@ -442,7 +676,8 @@ def get_closure(incident_id: str) -> dict:
 
 
 @app.get("/etr/accuracy")
-def etr_accuracy() -> dict:
+def etr_accuracy(request: Request) -> dict:
+    _guard_surface(request, SURFACE_ETR)
     return svc().closure.accuracy_ledger()
 
 
@@ -475,11 +710,20 @@ class DecideWorkOrderRequest(BaseModel):
 
 
 @app.post("/incidents/{incident_id}/work-orders")
-def draft_work_order(incident_id: str, request: DraftWorkOrderRequest) -> dict:
+def draft_work_order(
+    incident_id: str, request: DraftWorkOrderRequest, http_request: Request
+) -> dict:
     s = svc()
+    principal = _principal(
+        http_request, surface=SURFACE_WORK_ORDERS, target=incident_id
+    )
     as_of = request.as_of or datetime.now(timezone.utc)
     try:
-        order = s.work_orders.draft(incident_id, as_of, request.drafted_by)
+        order = s.work_orders.draft(
+            incident_id, as_of, request.drafted_by, principal=principal
+        )
+    except AccessDeniedError as exc:
+        raise _forbidden(exc) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except WorkOrderRefusal as exc:
@@ -488,7 +732,8 @@ def draft_work_order(incident_id: str, request: DraftWorkOrderRequest) -> dict:
 
 
 @app.get("/incidents/{incident_id}/work-orders")
-def list_incident_work_orders(incident_id: str) -> dict:
+def list_incident_work_orders(incident_id: str, request: Request) -> dict:
+    _guard_incident(request, incident_id, SURFACE_WORK_ORDERS)
     s = svc()
     if s.store.get_incident(incident_id) is None:
         raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
@@ -501,13 +746,21 @@ def list_incident_work_orders(incident_id: str) -> dict:
 
 
 @app.get("/work-orders")
-def list_work_orders(state: str | None = None) -> list[dict]:
+def list_work_orders(request: Request, state: str | None = None) -> list[dict]:
     s = svc()
+    if not _list_visible(request, SURFACE_WORK_ORDERS):
+        return []
     return [s.work_orders.view(o) for o in s.work_orders.list_by_state(state)]
 
 
 @app.get("/work-orders/{order_id}")
-def get_work_order(order_id: str) -> dict:
+def get_work_order(order_id: str, request: Request) -> dict:
+    _guard_surface(
+        request,
+        SURFACE_WORK_ORDERS,
+        not_found_detail=f"no such work order: {order_id}",
+        target=order_id,
+    )
     s = svc()
     order = s.store.get_work_order(order_id)
     if order is None:
@@ -516,8 +769,13 @@ def get_work_order(order_id: str) -> dict:
 
 
 @app.post("/work-orders/{order_id}/revise")
-def revise_work_order(order_id: str, request: ReviseWorkOrderRequest) -> dict:
+def revise_work_order(
+    order_id: str, request: ReviseWorkOrderRequest, http_request: Request
+) -> dict:
     s = svc()
+    principal = _principal(
+        http_request, surface=SURFACE_WORK_ORDERS, target=order_id
+    )
     as_of = request.as_of or datetime.now(timezone.utc)
     try:
         order = s.work_orders.revise(
@@ -526,7 +784,10 @@ def revise_work_order(order_id: str, request: ReviseWorkOrderRequest) -> dict:
             as_of,
             operator_note=request.operator_note,
             extra_materials=request.extra_materials,
+            principal=principal,
         )
+    except AccessDeniedError as exc:
+        raise _forbidden(exc) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except WorkOrderRefusal as exc:
@@ -535,8 +796,13 @@ def revise_work_order(order_id: str, request: ReviseWorkOrderRequest) -> dict:
 
 
 @app.post("/work-orders/{order_id}/assign")
-def assign_work_order(order_id: str, request: AssignWorkOrderRequest) -> dict:
+def assign_work_order(
+    order_id: str, request: AssignWorkOrderRequest, http_request: Request
+) -> dict:
     s = svc()
+    principal = _principal(
+        http_request, surface=SURFACE_WORK_ORDERS, target=order_id
+    )
     try:
         assignment = s.work_orders.assign(
             order_id,
@@ -545,7 +811,10 @@ def assign_work_order(order_id: str, request: AssignWorkOrderRequest) -> dict:
             request.window_start,
             request.window_end,
             datetime.now(timezone.utc),
+            principal=principal,
         )
+    except AccessDeniedError as exc:
+        raise _forbidden(exc) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except WorkOrderRefusal as exc:
@@ -554,7 +823,13 @@ def assign_work_order(order_id: str, request: AssignWorkOrderRequest) -> dict:
 
 
 @app.get("/work-orders/{order_id}/assignments")
-def list_work_order_assignments(order_id: str) -> dict:
+def list_work_order_assignments(order_id: str, request: Request) -> dict:
+    _guard_surface(
+        request,
+        SURFACE_WORK_ORDERS,
+        not_found_detail=f"no such work order: {order_id}",
+        target=order_id,
+    )
     s = svc()
     if s.store.get_work_order(order_id) is None:
         raise HTTPException(status_code=404, detail=f"no such work order: {order_id}")
@@ -567,8 +842,16 @@ def list_work_order_assignments(order_id: str) -> dict:
     }
 
 
-def _decide(order_id: str, decision: str, request: DecideWorkOrderRequest) -> dict:
+def _decide(
+    order_id: str,
+    decision: str,
+    request: DecideWorkOrderRequest,
+    http_request: Request,
+) -> dict:
     s = svc()
+    principal = _principal(
+        http_request, surface=SURFACE_WORK_ORDERS, target=order_id
+    )
     try:
         act, notifications = s.work_orders.decide(
             order_id,
@@ -577,7 +860,10 @@ def _decide(order_id: str, decision: str, request: DecideWorkOrderRequest) -> di
             request.role,
             datetime.now(timezone.utc),
             reason=request.reason,
+            principal=principal,
         )
+    except AccessDeniedError as exc:
+        raise _forbidden(exc) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except WorkOrderRefusal as exc:
@@ -591,17 +877,27 @@ def _decide(order_id: str, decision: str, request: DecideWorkOrderRequest) -> di
 
 
 @app.post("/work-orders/{order_id}/approve")
-def approve_work_order(order_id: str, request: DecideWorkOrderRequest) -> dict:
-    return _decide(order_id, "approved", request)
+def approve_work_order(
+    order_id: str, request: DecideWorkOrderRequest, http_request: Request
+) -> dict:
+    return _decide(order_id, "approved", request, http_request)
 
 
 @app.post("/work-orders/{order_id}/reject")
-def reject_work_order(order_id: str, request: DecideWorkOrderRequest) -> dict:
-    return _decide(order_id, "rejected", request)
+def reject_work_order(
+    order_id: str, request: DecideWorkOrderRequest, http_request: Request
+) -> dict:
+    return _decide(order_id, "rejected", request, http_request)
 
 
 @app.get("/work-orders/{order_id}/decisions")
-def list_work_order_decisions(order_id: str) -> dict:
+def list_work_order_decisions(order_id: str, request: Request) -> dict:
+    _guard_surface(
+        request,
+        SURFACE_WORK_ORDERS,
+        not_found_detail=f"no such work order: {order_id}",
+        target=order_id,
+    )
     s = svc()
     if s.store.get_work_order(order_id) is None:
         raise HTTPException(status_code=404, detail=f"no such work order: {order_id}")
@@ -615,7 +911,8 @@ def list_work_order_decisions(order_id: str) -> dict:
 
 
 @app.get("/incidents/{incident_id}/chain")
-def verify_chain(incident_id: str) -> dict:
+def verify_chain(incident_id: str, request: Request) -> dict:
+    _guard_incident(request, incident_id, SURFACE_INCIDENT)
     s = svc()
     if s.store.get_incident(incident_id) is None:
         raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
@@ -637,8 +934,13 @@ class FieldUpdateRequest(BaseModel):
 
 
 @app.post("/incidents/{incident_id}/updates")
-def post_field_update(incident_id: str, request: FieldUpdateRequest) -> dict:
+def post_field_update(
+    incident_id: str, request: FieldUpdateRequest, http_request: Request
+) -> dict:
     s = svc()
+    principal = _principal(
+        http_request, surface=SURFACE_FIELD_UPDATES, target=incident_id
+    )
     try:
         update = s.updates.post_update(
             incident_id,
@@ -650,7 +952,10 @@ def post_field_update(incident_id: str, request: FieldUpdateRequest) -> dict:
             device_id=request.device_id,
             finding=request.finding,
             alarm=request.alarm,
+            principal=principal,
         )
+    except AccessDeniedError as exc:
+        raise _forbidden(exc) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except UpdateRefusal as exc:
@@ -659,7 +964,8 @@ def post_field_update(incident_id: str, request: FieldUpdateRequest) -> dict:
 
 
 @app.get("/incidents/{incident_id}/updates")
-def list_field_updates(incident_id: str) -> dict:
+def list_field_updates(incident_id: str, request: Request) -> dict:
+    _guard_incident(request, incident_id, SURFACE_FIELD_UPDATES)
     s = svc()
     if s.store.get_incident(incident_id) is None:
         raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
@@ -678,8 +984,13 @@ class DeclareTopologyRequest(BaseModel):
 
 
 @app.post("/topology/declare")
-def declare_topology(request: DeclareTopologyRequest) -> dict:
+def declare_topology(
+    request: DeclareTopologyRequest, http_request: Request
+) -> dict:
     s = svc()
+    principal = _principal(
+        http_request, surface=SURFACE_TOPOLOGY, target=request.version
+    )
     try:
         declaration = s.topology_acts.declare(
             request.version,
@@ -687,14 +998,19 @@ def declare_topology(request: DeclareTopologyRequest) -> dict:
             request.role,
             request.declared_at or datetime.now(timezone.utc),
             request.effective_at,
+            principal=principal,
         )
+    except AccessDeniedError as exc:
+        raise _forbidden(exc) from exc
     except TopologyRefusal as exc:
         raise HTTPException(status_code=422, detail={"problems": exc.problems}) from exc
     return declaration.model_dump(mode="json")
 
 
 @app.get("/topology/declarations")
-def list_topology_declarations() -> dict:
+def list_topology_declarations(request: Request) -> dict:
+    if not _list_visible(request, SURFACE_TOPOLOGY):
+        return {"declarations": []}
     return {
         "declarations": [
             d.model_dump(mode="json") for d in svc().topology_acts.declarations()
@@ -709,15 +1025,23 @@ class RecorrelateRequest(BaseModel):
 
 
 @app.post("/incidents/{incident_id}/recorrelate")
-def recorrelate_incident(incident_id: str, request: RecorrelateRequest) -> dict:
+def recorrelate_incident(
+    incident_id: str, request: RecorrelateRequest, http_request: Request
+) -> dict:
     s = svc()
+    principal = _principal(
+        http_request, surface=SURFACE_INCIDENT, target=incident_id
+    )
     try:
         revision = s.revisions.recorrelate(
             incident_id,
             request.recorrelated_by,
             request.role,
             request.as_of or datetime.now(timezone.utc),
+            principal=principal,
         )
+    except AccessDeniedError as exc:
+        raise _forbidden(exc) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RevisionRefusal as exc:
@@ -726,7 +1050,13 @@ def recorrelate_incident(incident_id: str, request: RecorrelateRequest) -> dict:
 
 
 @app.get("/incidents/{incident_id}/revisions")
-def list_incident_revisions(incident_id: str) -> dict:
+def list_incident_revisions(incident_id: str, request: Request) -> dict:
+    _guard_incident(
+        request,
+        incident_id,
+        SURFACE_INCIDENT,
+        not_found_detail=str(KeyError(f"no such incident: {incident_id}")),
+    )
     s = svc()
     try:
         chain = s.revisions.revision_chain(incident_id)
@@ -739,7 +1069,13 @@ def list_incident_revisions(incident_id: str) -> dict:
 
 
 @app.get("/revisions/{revision_id}")
-def get_revision(revision_id: str) -> dict:
+def get_revision(revision_id: str, request: Request) -> dict:
+    _guard_surface(
+        request,
+        SURFACE_INCIDENT,
+        not_found_detail=f"no such revision: {revision_id}",
+        target=revision_id,
+    )
     revision = svc().store.get_incident_revision(revision_id)
     if revision is None:
         raise HTTPException(status_code=404, detail=f"no such revision: {revision_id}")
@@ -760,8 +1096,13 @@ class RecordSignalRequest(BaseModel):
 
 
 @app.post("/incidents/{incident_id}/restoration/signals")
-def record_restoration_signal(incident_id: str, request: RecordSignalRequest) -> dict:
+def record_restoration_signal(
+    incident_id: str, request: RecordSignalRequest, http_request: Request
+) -> dict:
     s = svc()
+    principal = _principal(
+        http_request, surface=SURFACE_RESTORATION, target=incident_id
+    )
     try:
         signal = s.restoration.record_signal(
             incident_id,
@@ -772,7 +1113,10 @@ def record_restoration_signal(incident_id: str, request: RecordSignalRequest) ->
             request.state,
             device_id=request.device_id,
             feeder_id=request.feeder_id,
+            principal=principal,
         )
+    except AccessDeniedError as exc:
+        raise _forbidden(exc) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RestorationRefusal as exc:
@@ -781,7 +1125,8 @@ def record_restoration_signal(incident_id: str, request: RecordSignalRequest) ->
 
 
 @app.get("/incidents/{incident_id}/restoration/signals")
-def list_restoration_signals(incident_id: str) -> dict:
+def list_restoration_signals(incident_id: str, request: Request) -> dict:
+    _guard_incident(request, incident_id, SURFACE_RESTORATION)
     s = svc()
     if s.store.get_incident(incident_id) is None:
         raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
@@ -799,19 +1144,29 @@ class ConfirmRestorationRequest(BaseModel):
 
 
 @app.post("/incidents/{incident_id}/restoration/confirm")
-def confirm_restoration(incident_id: str, request: ConfirmRestorationRequest) -> dict:
+def confirm_restoration(
+    incident_id: str, request: ConfirmRestorationRequest, http_request: Request
+) -> dict:
     s = svc()
+    principal = _principal(
+        http_request, surface=SURFACE_RESTORATION, target=incident_id
+    )
     try:
         confirmation = s.restoration.confirm(
-            incident_id, request.as_of or datetime.now(timezone.utc)
+            incident_id,
+            request.as_of or datetime.now(timezone.utc),
+            principal=principal,
         )
+    except AccessDeniedError as exc:
+        raise _forbidden(exc) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return confirmation.model_dump(mode="json")
 
 
 @app.get("/incidents/{incident_id}/restoration/confirmation")
-def get_restoration_confirmation(incident_id: str) -> dict:
+def get_restoration_confirmation(incident_id: str, request: Request) -> dict:
+    _guard_incident(request, incident_id, SURFACE_RESTORATION)
     s = svc()
     if s.store.get_incident(incident_id) is None:
         raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
@@ -834,8 +1189,13 @@ class GatedCloseRequest(BaseModel):
 
 
 @app.post("/incidents/{incident_id}/close-gated")
-def gated_close_incident(incident_id: str, request: GatedCloseRequest) -> dict:
+def gated_close_incident(
+    incident_id: str, request: GatedCloseRequest, http_request: Request
+) -> dict:
     s = svc()
+    principal = _principal(
+        http_request, surface=SURFACE_RESTORATION, target=incident_id
+    )
     try:
         act, closure, outcome, record = s.restoration.close_incident(
             incident_id,
@@ -845,7 +1205,10 @@ def gated_close_incident(incident_id: str, request: GatedCloseRequest) -> dict:
             request.resolution_summary,
             waivers=request.waivers,
             recorded_at=request.recorded_at,
+            principal=principal,
         )
+    except AccessDeniedError as exc:
+        raise _forbidden(exc) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RestorationRefusal as exc:
@@ -859,7 +1222,8 @@ def gated_close_incident(incident_id: str, request: GatedCloseRequest) -> dict:
 
 
 @app.get("/incidents/{incident_id}/close-act")
-def get_close_act(incident_id: str) -> dict:
+def get_close_act(incident_id: str, request: Request) -> dict:
+    _guard_incident(request, incident_id, SURFACE_RESTORATION)
     s = svc()
     if s.store.get_incident(incident_id) is None:
         raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
@@ -878,8 +1242,13 @@ class CompleteWorkOrderRequest(BaseModel):
 
 
 @app.post("/work-orders/{order_id}/complete")
-def complete_work_order(order_id: str, request: CompleteWorkOrderRequest) -> dict:
+def complete_work_order(
+    order_id: str, request: CompleteWorkOrderRequest, http_request: Request
+) -> dict:
     s = svc()
+    principal = _principal(
+        http_request, surface=SURFACE_WORK_ORDERS, target=order_id
+    )
     try:
         completion = s.work_orders.complete(
             order_id,
@@ -887,7 +1256,10 @@ def complete_work_order(order_id: str, request: CompleteWorkOrderRequest) -> dic
             request.role,
             request.completed_at or datetime.now(timezone.utc),
             note=request.note,
+            principal=principal,
         )
+    except AccessDeniedError as exc:
+        raise _forbidden(exc) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except WorkOrderRefusal as exc:
@@ -902,15 +1274,23 @@ class SplitIncidentRequest(BaseModel):
 
 
 @app.post("/incidents/{incident_id}/split")
-def split_incident(incident_id: str, request: SplitIncidentRequest) -> dict:
+def split_incident(
+    incident_id: str, request: SplitIncidentRequest, http_request: Request
+) -> dict:
     s = svc()
+    principal = _principal(
+        http_request, surface=SURFACE_RESTORATION, target=incident_id
+    )
     try:
         split = s.restoration.split_incident(
             incident_id,
             request.split_by,
             request.role,
             request.as_of or datetime.now(timezone.utc),
+            principal=principal,
         )
+    except AccessDeniedError as exc:
+        raise _forbidden(exc) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RestorationRefusal as exc:
@@ -919,7 +1299,8 @@ def split_incident(incident_id: str, request: SplitIncidentRequest) -> dict:
 
 
 @app.get("/incidents/{incident_id}/splits")
-def list_incident_splits(incident_id: str) -> dict:
+def list_incident_splits(incident_id: str, request: Request) -> dict:
+    _guard_incident(request, incident_id, SURFACE_RESTORATION)
     s = svc()
     if s.store.get_incident(incident_id) is None:
         raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
@@ -932,7 +1313,8 @@ def list_incident_splits(incident_id: str) -> dict:
 
 
 @app.get("/incidents/{incident_id}/contradictions")
-def list_incident_contradictions(incident_id: str) -> dict:
+def list_incident_contradictions(incident_id: str, request: Request) -> dict:
+    _guard_incident(request, incident_id, SURFACE_RESTORATION)
     s = svc()
     if s.store.get_incident(incident_id) is None:
         raise HTTPException(status_code=404, detail=f"no such incident: {incident_id}")
@@ -946,7 +1328,15 @@ def list_incident_contradictions(incident_id: str) -> dict:
 
 
 @app.get("/incidents/{incident_id}/event-log")
-def get_incident_event_log(incident_id: str, format: str = "json") -> dict:
+def get_incident_event_log(
+    incident_id: str, request: Request, format: str = "json"
+) -> dict:
+    _guard_incident(
+        request,
+        incident_id,
+        SURFACE_INCIDENT,
+        not_found_detail=str(KeyError(f"no such incident: {incident_id}")),
+    )
     s = svc()
     try:
         log = s.event_log.build_log(incident_id)
@@ -973,8 +1363,11 @@ class StormDeclareRequest(BaseModel):
 
 
 @app.post("/storm/declare")
-def declare_storm(request: StormDeclareRequest) -> dict:
+def declare_storm(
+    request: StormDeclareRequest, http_request: Request
+) -> dict:
     s = svc()
+    principal = _principal(http_request, surface=SURFACE_STORM)
     try:
         declaration = s.storm.declare(
             request.declared_by,
@@ -983,7 +1376,10 @@ def declare_storm(request: StormDeclareRequest) -> dict:
             request.declared_at or datetime.now(timezone.utc),
             feeders=request.feeders,
             region=request.region,
+            principal=principal,
         )
+    except AccessDeniedError as exc:
+        raise _forbidden(exc) from exc
     except StormRefusal as exc:
         raise HTTPException(status_code=422, detail={"problems": exc.problems}) from exc
     return declaration.model_dump(mode="json")
@@ -1000,8 +1396,11 @@ class StormExtendRequest(BaseModel):
 
 
 @app.post("/storm/extend")
-def extend_storm(request: StormExtendRequest) -> dict:
+def extend_storm(request: StormExtendRequest, http_request: Request) -> dict:
     s = svc()
+    principal = _principal(
+        http_request, surface=SURFACE_STORM, target=request.declaration_id
+    )
     try:
         act = s.storm.extend(
             request.declaration_id,
@@ -1011,7 +1410,10 @@ def extend_storm(request: StormExtendRequest) -> dict:
             request.declared_at or datetime.now(timezone.utc),
             feeders=request.feeders,
             region=request.region,
+            principal=principal,
         )
+    except AccessDeniedError as exc:
+        raise _forbidden(exc) from exc
     except StormRefusal as exc:
         raise HTTPException(status_code=422, detail={"problems": exc.problems}) from exc
     return act.model_dump(mode="json")
@@ -1026,8 +1428,13 @@ class StormStandDownRequest(BaseModel):
 
 
 @app.post("/storm/stand-down")
-def stand_down_storm(request: StormStandDownRequest) -> dict:
+def stand_down_storm(
+    request: StormStandDownRequest, http_request: Request
+) -> dict:
     s = svc()
+    principal = _principal(
+        http_request, surface=SURFACE_STORM, target=request.declaration_id
+    )
     try:
         act = s.storm.stand_down(
             request.declaration_id,
@@ -1035,14 +1442,19 @@ def stand_down_storm(request: StormStandDownRequest) -> dict:
             request.role,
             request.reason,
             request.declared_at or datetime.now(timezone.utc),
+            principal=principal,
         )
+    except AccessDeniedError as exc:
+        raise _forbidden(exc) from exc
     except StormRefusal as exc:
         raise HTTPException(status_code=422, detail={"problems": exc.problems}) from exc
     return act.model_dump(mode="json")
 
 
 @app.get("/storm/declarations")
-def list_storm_declarations() -> dict:
+def list_storm_declarations(request: Request) -> dict:
+    if not _list_visible(request, SURFACE_STORM):
+        return {"declarations": []}
     return {
         "declarations": [
             d.model_dump(mode="json") for d in svc().storm.declarations()
@@ -1051,7 +1463,10 @@ def list_storm_declarations() -> dict:
 
 
 @app.get("/storm/state")
-def get_storm_state(feeder_id: str, at: str | None = None) -> dict:
+def get_storm_state(
+    feeder_id: str, request: Request, at: str | None = None
+) -> dict:
+    _guard_surface(request, SURFACE_STORM, target=feeder_id)
     moment = datetime.now(timezone.utc)
     if at:
         try:
@@ -1070,21 +1485,37 @@ class StormReviewRequest(BaseModel):
 
 
 @app.post("/storm/reviews")
-def compute_storm_review(request: StormReviewRequest) -> dict:
+def compute_storm_review(
+    request: StormReviewRequest, http_request: Request
+) -> dict:
     s = svc()
+    principal = _principal(
+        http_request, surface=SURFACE_STORM, target=request.declaration_id
+    )
     try:
         review = s.storm.compute_review(
             request.declaration_id,
             request.computed_by,
             request.computed_at or datetime.now(timezone.utc),
+            principal=principal,
         )
+    except AccessDeniedError as exc:
+        raise _forbidden(exc) from exc
     except StormRefusal as exc:
         raise HTTPException(status_code=422, detail={"problems": exc.problems}) from exc
     return review.model_dump(mode="json")
 
 
 @app.get("/storm/declarations/{declaration_id}/review")
-def get_storm_review_for_declaration(declaration_id: str) -> dict:
+def get_storm_review_for_declaration(
+    declaration_id: str, request: Request
+) -> dict:
+    _guard_surface(
+        request,
+        SURFACE_STORM,
+        not_found_detail=f"no such storm declaration: {declaration_id}",
+        target=declaration_id,
+    )
     s = svc()
     if s.storm.get_declaration(declaration_id) is None:
         raise HTTPException(
@@ -1101,7 +1532,13 @@ def get_storm_review_for_declaration(declaration_id: str) -> dict:
 
 
 @app.get("/storm/reviews/{review_id}")
-def get_storm_review(review_id: str) -> dict:
+def get_storm_review(review_id: str, request: Request) -> dict:
+    _guard_surface(
+        request,
+        SURFACE_STORM,
+        not_found_detail=f"no such storm review: {review_id}",
+        target=review_id,
+    )
     review = svc().storm.get_review(review_id)
     if review is None:
         raise HTTPException(status_code=404, detail=f"no such storm review: {review_id}")
@@ -1109,7 +1546,13 @@ def get_storm_review(review_id: str) -> dict:
 
 
 @app.get("/storm/reviews/{review_id}/verify")
-def verify_storm_review(review_id: str) -> dict:
+def verify_storm_review(review_id: str, request: Request) -> dict:
+    _guard_surface(
+        request,
+        SURFACE_STORM,
+        not_found_detail=str(KeyError(f"no such storm review: {review_id}")),
+        target=review_id,
+    )
     s = svc()
     try:
         problems = s.storm.verify_review(review_id)
@@ -1132,10 +1575,11 @@ def console_page() -> str:
 
 
 @app.get("/console/data")
-def console_data() -> dict:
+def console_data(request: Request) -> dict:
     """The board payload: the operations board's computation at
     this moment, plus the latest handover's view (its
     acceptance and its staleness, computed live)."""
+    _guard_surface(request, SURFACE_CONSOLE)
     s = svc()
     body = s.board.board(datetime.now(timezone.utc))
     body["handover"] = s.handover.latest_view()
@@ -1149,14 +1593,20 @@ class AssembleHandoverRequest(BaseModel):
 
 
 @app.post("/handovers")
-def assemble_handover(request: AssembleHandoverRequest) -> dict:
+def assemble_handover(
+    request: AssembleHandoverRequest, http_request: Request
+) -> dict:
     s = svc()
+    principal = _principal(http_request, surface=SURFACE_CONSOLE)
     try:
         handover = s.handover.assemble(
             request.handed_over_by,
             request.role,
             request.handed_over_at or datetime.now(timezone.utc),
+            principal=principal,
         )
+    except AccessDeniedError as exc:
+        raise _forbidden(exc) from exc
     except HandoverRefusal as exc:
         raise HTTPException(
             status_code=422, detail={"problems": exc.problems}
@@ -1165,7 +1615,9 @@ def assemble_handover(request: AssembleHandoverRequest) -> dict:
 
 
 @app.get("/handovers")
-def list_handovers() -> dict:
+def list_handovers(request: Request) -> dict:
+    if not _list_visible(request, SURFACE_CONSOLE):
+        return {"handovers": []}
     s = svc()
     return {
         "handovers": [s.handover.view(h) for h in s.handover.handovers()]
@@ -1173,7 +1625,13 @@ def list_handovers() -> dict:
 
 
 @app.get("/handovers/{handover_id}")
-def get_handover(handover_id: str) -> dict:
+def get_handover(handover_id: str, request: Request) -> dict:
+    _guard_surface(
+        request,
+        SURFACE_CONSOLE,
+        not_found_detail=f"no such shift handover: {handover_id}",
+        target=handover_id,
+    )
     s = svc()
     handover = s.handover.get(handover_id)
     if handover is None:
@@ -1184,7 +1642,15 @@ def get_handover(handover_id: str) -> dict:
 
 
 @app.get("/handovers/{handover_id}/verify")
-def verify_handover(handover_id: str) -> dict:
+def verify_handover(handover_id: str, request: Request) -> dict:
+    _guard_surface(
+        request,
+        SURFACE_CONSOLE,
+        not_found_detail=str(
+            KeyError(f"no such shift handover: {handover_id}")
+        ),
+        target=handover_id,
+    )
     s = svc()
     try:
         problems = s.handover.verify(handover_id)
@@ -1200,15 +1666,23 @@ class AcceptHandoverRequest(BaseModel):
 
 
 @app.post("/handovers/{handover_id}/accept")
-def accept_handover(handover_id: str, request: AcceptHandoverRequest) -> dict:
+def accept_handover(
+    handover_id: str, request: AcceptHandoverRequest, http_request: Request
+) -> dict:
     s = svc()
+    principal = _principal(
+        http_request, surface=SURFACE_CONSOLE, target=handover_id
+    )
     try:
         acceptance = s.handover.accept(
             handover_id,
             request.accepted_by,
             request.role,
             request.accepted_at or datetime.now(timezone.utc),
+            principal=principal,
         )
+    except AccessDeniedError as exc:
+        raise _forbidden(exc) from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except HandoverRefusal as exc:
@@ -1219,12 +1693,14 @@ def accept_handover(handover_id: str, request: AcceptHandoverRequest) -> dict:
 
 
 @app.get("/topology/versions")
-def topology_versions() -> dict:
+def topology_versions(request: Request) -> dict:
+    _guard_surface(request, SURFACE_TOPOLOGY)
     return {"versions": svc().store.list_topology_versions()}
 
 
 @app.get("/topology/{version}")
-def get_topology(version: str) -> dict:
+def get_topology(version: str, request: Request) -> dict:
+    _guard_surface(request, SURFACE_TOPOLOGY, target=version)
     payload = svc().store.get_topology_payload(version)
     if payload is None:
         raise HTTPException(status_code=404, detail=f"no such topology version: {version}")
@@ -1235,4 +1711,32 @@ def get_topology(version: str) -> dict:
         "feeders": list(view.feeders.values()),
         "devices": svc().store.list_devices(version),
         "critical_loads": view.critical_loads,
+    }
+
+
+# -- Round 11: the access pack and the denial log ----------------
+
+
+@app.get("/access/pack")
+def get_access_pack() -> dict:
+    """The access pack as data, with its content fingerprint.
+    Public by design: the pack is code, published in this repo —
+    knowing the rules is not a way around them."""
+    s = svc()
+    return {
+        "pack": s.access.pack.model_dump(mode="json"),
+        "fingerprint": access_pack_fingerprint(s.access.pack),
+    }
+
+
+@app.get("/access/denials")
+def list_access_denials(request: Request) -> dict:
+    """The denial log: every recorded refusal, in append order.
+    A guarded surface — a carried principal must hold the
+    denial-log read (auditor, duty_manager); the principal-less
+    local path reads it as before."""
+    s = svc()
+    _guard_surface(request, SURFACE_DENIAL_LOG)
+    return {
+        "denials": [d.model_dump(mode="json") for d in s.access.denials()]
     }

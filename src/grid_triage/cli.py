@@ -10,6 +10,7 @@ import argparse
 import json
 from datetime import datetime, timezone
 
+from grid_triage.access import access_pack_fingerprint
 from grid_triage.closure import ClosureRefusal
 from grid_triage.etr import EtrRefusal
 from grid_triage.handover import HandoverRefusal
@@ -213,6 +214,12 @@ def main(argv: list[str] | None = None) -> int:
     p_hoa.add_argument("--by", required=True, help="the incoming operator accepting")
     p_hoa.add_argument("--role", required=True, help="the accepting operator's role")
     p_hoa.add_argument("--at", default=None, help="ISO timestamp; default: now")
+    # Round 11: the access layer's own reads. The CLI is the
+    # trusted local path — it carries no principal; these two
+    # views exist so the room can inspect the rules and the
+    # refusal record locally.
+    sub.add_parser("access-pack")
+    sub.add_parser("access-denials")
     args = parser.parse_args(argv)
 
     svc = build_services()
@@ -883,6 +890,16 @@ def main(argv: list[str] | None = None) -> int:
             print("refused: " + "; ".join(exc.problems))
             return 1
         print(json.dumps(acceptance.model_dump(mode="json"), indent=2))
+    elif args.command == "access-pack":
+        print(json.dumps({
+            "pack": svc.access.pack.model_dump(mode="json"),
+            "fingerprint": access_pack_fingerprint(svc.access.pack),
+        }, indent=2))
+    elif args.command == "access-denials":
+        print(json.dumps(
+            [d.model_dump(mode="json") for d in svc.access.denials()],
+            indent=2,
+        ))
     return 0
 
 
