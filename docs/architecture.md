@@ -388,6 +388,28 @@ re-call of the first — the property `scripts/check_reports.py`
 grades by planting forgeries whose fingerprints honestly cover
 their wrong figures.
 
+**The model gateway (Round 13)** governs the build's one model
+call, which Rounds 1–12 left bare. The gateway wraps the
+configured profile port — offline composer by default, the
+fail-closed Bedrock profile when selected — and the assembler
+calls it exactly where it called the port, so the verified-
+brief pipeline (citation, band, attribution and basis checks)
+is untouched. Every routed call lands as an insert-only ledger
+record (migration 0012) carrying measured canonical sizes, the
+model pack's token estimates and rates, and an exact integer
+micro-dollar cost; refused calls (the pack's per-incident call
+and cost budgets, judged before the port is touched) and
+errored calls (a hosted profile's fail-closed refusal) are
+records too, at zero tokens and zero cost. Totals are a fold,
+never a stored number, and `verify_ledger` re-derives the
+arithmetic record by record — the same second-path discipline
+as the oversight verifier, graded by
+`scripts/check_model_ledger.py` from raw store reads. The
+ledger read is an incident-scoped surface in the access pack,
+with the existence hiding every incident surface carries. The
+gateway holds no tool shapes: it routes a draft-shaped call
+and writes its own ledger, so Law 1's catalogue is unchanged.
+
 ## Stores
 
 One store port, two dialects (`grid_triage/store.py`): SQLite

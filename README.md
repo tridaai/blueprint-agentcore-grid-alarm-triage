@@ -599,6 +599,53 @@ gives the record the artefact management reads later.
   operator and duty manager generate, the auditor reads and
   generates none, and every refusal is recorded first.
 
+## What Round 13 builds
+
+Round 13 surveys before it builds. The red team's book is
+closed — RT-17 by Round 11's decision, RT-15 and RT-16 by
+Round 12's amendments; no finding stands open. The genuine
+gap the survey found is the one the sibling AgentCore
+blueprints closed in their middle rounds: the model call was
+the last ungoverned surface in the build. Brief assembly
+called the model port bare — no record of what was asked,
+what came back, or what it cost.
+
+- **The model gateway.** Every model call now routes through
+  one door (`ModelGateway`), which wraps the configured
+  profile — the offline deterministic composer by default, the
+  fail-closed Bedrock profile when selected — without changing
+  its behaviour. A hosted profile that is not configured still
+  refuses loudly; the gateway records that error and lets it
+  propagate. Nothing falls back silently, and the brief a call
+  produces still names the wrapped profile.
+- **The cost ledger (migration 0012).** Completed, refused and
+  errored calls each land as one insert-only record before
+  control returns to the caller: the measured canonical sizes
+  of the facts handed over and the statements returned, the
+  token estimates the model pack's stated rule derives from
+  those sizes (canonical bytes ÷ 4, rounded up — a measurement
+  rule, not a claim about any provider's tokenizer), the
+  pack's rates, and the exact integer cost in micro-dollars.
+  Totals are never stored: they fold from the records, and
+  `verify_ledger` re-derives every record's arithmetic and
+  re-folds by a second accumulation — `make ledger-check`
+  grades the same reconciliation from raw store reads,
+  including a planted tamper it must name.
+- **Budgets that refuse on the record.** The pack
+  (`2026.10.1`) states a per-incident call budget (25) and a
+  per-incident cost budget (2,500,000 micro-dollars). A call
+  that would cross either is refused before the port is
+  touched; the refusal is itself a ledger record naming the
+  budget it hit, and the refusal propagates. The offline
+  profile is priced at zero, so the call budget is the one
+  that binds it; the cost budget binds priced profiles.
+- **A guarded read surface.** The ledger is an incident-scoped
+  read under the Round 11 access pack (`model_ledger`):
+  operator, duty manager and auditor read it; dispatcher and
+  field crew are refused with the incident surfaces' existence
+  hiding — answered exactly as a non-existent incident is
+  answered, and recorded on the denial log.
+
 ## Quick start
 
 ```bash
@@ -607,6 +654,7 @@ make demo             # planted streams: flood in, one incident out
 make test             # pytest
 make evals            # the eval gate (zero-tolerance counters)
 make reports-check    # the oversight report check (plants forgeries)
+make ledger-check     # the model ledger check (plants a tamper)
 make serve            # AgentCore Runtime app on :8080
 make api              # operations API on :8000
 make invoke           # local in-process invoke of the agent step
@@ -677,6 +725,7 @@ What is built and what is not, plainly:
   crew note does not stale it.)
 - **Round 10 was a red team, not a feature.** Six defects in
   the R1–R9 system were found by adversarial probing and
+- **The red-team record (Round 10)** named six defects, all
   fixed (severity/ETR head rewinds, the closure act's missing
   role pack and future-dated restorations, storm overlap at
   the extension door and by backdating); three design-level
@@ -728,6 +777,18 @@ What is built and what is not, plainly:
   daemon); the Dockerfile and compose contracts are graded
   statically by `tests/test_docker_contract.py`.
 
+- **Model costs are pack-stated, not provider-billed
+  (Round 13).** The ledger's token figures come from the
+  pack's stated measurement rule over canonical sizes, and its
+  rates are the pack's stated reference rates (the offline
+  profile at zero; the bedrock profile at 3/15 micro-dollars
+  per input/output token). A deployment states its own
+  contracted rates by superseding the pack. No live Bedrock
+  call has been made from this build — the hosted profile
+  remains fail-closed and stub-tested, and the gateway records
+  its refusal as an errored call rather than letting any path
+  proceed unpriced.
+
 ## Layout
 
 ```
@@ -738,16 +799,17 @@ src/grid_triage/   models, topology, correlation, services (ingest),
                    revisions (R6), restoration (R7), storm (R8),
                    board / handover / static console (R9),
                    access (R11), oversight (R12),
-                   runtime_app / runtime_main
+                   model_gateway (R13), runtime_app / runtime_main
                    (AgentCore Runtime),
                    api, demo, cli, local_invoke, wiring, config
 data/topology/     versioned territory data (v1.json, v2.json)
 data/roster/       versioned crew roster artefact (v1.json)
 migrations/        numbered SQL migrations, sqlite + postgres trees
-tests/             pytest suite (249 tests through R12)
+tests/             pytest suite (258 tests through R13)
 evals/             the eval gate (run_evals.py)
 scripts/           check_console.py — the console correctness check
                    check_reports.py — the oversight report check
+                   check_model_ledger.py — the model ledger check
 docs/              architecture.md — the honest AgentCore mapping
 ```
 
