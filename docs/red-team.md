@@ -300,3 +300,46 @@ place parameters live, content-addressed artefacts, and the
 store's immutability errors. The Postgres backend runs the
 same suite and the same eval gate; the fixes are
 service-level, above both stores.
+
+## Amendment — Round 11 (appended; the Round 10 record above is untouched)
+
+### RT-17 — closed by Round 11 decision
+
+The product decision RT-17 asked for has been taken: **the
+Round 4 closure surface is gated wherever a principal is
+carried.** A principal-carrying call on `ClosureService` must
+hold the access pack's close act (operator, duty_manager),
+must be the operator the closure names, recorded under their
+own role — and must meet the Round 7 gate's preconditions: a
+complete restoration confirmation of record, and no open
+work-order position (the head order rejected, or completed).
+Where a precondition is unmet the surface refuses with a
+`ClosureRefusal` naming it — including that a waiver cannot
+be expressed on this surface, which is precisely what the
+gated close exists for.
+
+What deliberately did **not** change, and why:
+
+- **The principal-less path is byte-for-byte the Round 4
+  behaviour.** The seeded history and the ETR accuracy ledger
+  are built on this surface, as RT-17 itself noted; the local
+  CLI/harness caller is the trusted operations path across
+  this portfolio, and Round 11's enforcement governs calls
+  that carry a principal (the access layer's stated scope).
+  A principal-less close still records no confirmation
+  demand — that is now a *stated* property of the trusted
+  local path, not an unexamined gap.
+- **The gated close is not double-gated.** The gated surface
+  enforces the access pack's gated-close act at its own door
+  and calls the closure service internally as an
+  already-judged step; a waiver granted there is not
+  re-refused by the RT-17 gate.
+- **The graded R4 contract stands.** The accuracy outcome a
+  carried close produces is the same compared outcome the
+  principal-less path grades (kept as a test:
+  `test_rt17_carried_close_requires_the_gate_preconditions`
+  asserts the ledger's compared count).
+
+Kept as regression tests in `tests/test_r11.py` and as the
+zero-tolerance eval counter `ungated_surface_closures`.
+RT-15 and RT-16 remain open as recorded above.

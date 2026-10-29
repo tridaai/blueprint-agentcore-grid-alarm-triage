@@ -19,10 +19,10 @@ fill.
 | AgentCore service | Production role | In this repo (R1) |
 | --- | --- | --- |
 | **Runtime** | The agent's home: one microVM session per triage session, HTTP contract on port 8080 (`POST /invocations`, `GET /ping`), ARM64 container, sessions to the 8-hour envelope (storm events; hand-off at the edge is a documented pattern, not yet built) | **Real.** `grid_triage/runtime_app.py` serves the contract via the installed `bedrock-agentcore` SDK's `BedrockAgentCoreApp`; graded over ASGI transport in `tests/test_runtime_contract.py`. |
-| **Gateway** | SCADA-adjacent historian, OMS and AMI/meter systems exposed as read-only MCP targets — the single tool path | **Port-shaped.** The tool catalogue (`grid_triage/tools.py`) is the contract the Gateway targets will implement; the MCP wiring lands in Round 11. No Gateway is called in R1. |
-| **Policy** | Cedar pack on the Gateway: allow read/draft/notify, deny every control-shaped call, deny out-of-area reads; denials arrive as HTTP 200 + JSON-RPC −32002 and must be detected in code | **Designed, not yet shipped.** R1 enforces Law 1 by construction + registry scan. The pack itself is Round 11. |
+| **Gateway** | SCADA-adjacent historian, OMS and AMI/meter systems exposed as read-only MCP targets — the single tool path | **Port-shaped.** The tool catalogue (`grid_triage/tools.py`) is the contract the Gateway targets will implement; the MCP wiring lands in a later round. No Gateway is called in R1. |
+| **Policy** | Cedar pack on the Gateway: allow read/draft/notify, deny every control-shaped call, deny out-of-area reads; denials arrive as HTTP 200 + JSON-RPC −32002 and must be detected in code | **Designed, not yet shipped.** R1 enforces Law 1 by construction + registry scan. The pack itself is a later round. |
 | **Memory** | Episodic memory of prior incidents per feeder/device, feeding briefs (and, later, correlation) as recorded inputs | **Port + local double (R3).** `grid_triage/memory.py` defines the port in the managed service's event-memory shape — closed incidents as records of fact — served locally by a double over the store. Records are insert-only, retrieval is weighted and deterministic, and briefs cite records directly. No live AgentCore Memory call is made. |
-| **Identity** | Operator / dispatcher / field / auditor roles; control-room caller identity on every act | **Not in R1.** Access control is Round 16; the acts R1 records (ingest, correlation, brief) are system acts by design. |
+| **Identity** | Operator / dispatcher / field / auditor roles; control-room caller identity on every act | **Round 11 (in-repo layer).** The access pack (`grid_triage/access.py`) judges every principal-carrying call — surfaces carry the caller (API headers, Runtime payload, service argument), refusals are recorded in an insert-only denial log, and incident reads are existence-hidden. AgentCore Identity is the production termination point in front of these surfaces: it answers *who* the caller is; the pack answers what that caller's role may read and do. Calls carrying no principal (CLI, local harness) remain the trusted local path. |
 | **Evaluations** | AgentCore Evaluations on live traces (correctness/faithfulness), sampled online | **Repo-side only in R1.** The deterministic eval gate (`evals/run_evals.py`) is the primary gate; AgentCore evaluator configs join the infra artefacts at release hardening (R20). |
 | **Observability** | OpenTelemetry traces to CloudWatch as the incident audit trail | **Shaped.** Structured JSON logs with session/incident ids (`grid_triage/logging_config.py`); the console trace timeline is Round 13. |
 | **Bedrock models** | The model behind the agent step (Strands `BedrockModel`) | **Port.** Offline deterministic composer by default; the Bedrock profile refuses loudly until a region + model id are configured. No live call in R1's gates. |
@@ -329,6 +329,37 @@ first-match rule is never asked to arbitrate an overlap.
 Three findings the round could not fix in scope are recorded
 as open in the red-team record, two of them pinned by
 characterisation tests so changing them is deliberate.
+
+**Access control (Round 11)** is the domain layer the mapping
+table's Identity row points at. Its shape is the repo's own:
+the rules are a versioned pack in code (`access.py`, pack
+2026.10.1) stating per-role read surfaces and permitted acts,
+evaluated by a fail-closed judge; the grants are deliberately
+*derived from* the engine packs (an act's access grant never
+exceeds the roles its own pack allows), so the new layer
+narrows who may reach an act without ever widening what the
+act accepts. Three disciplines do the work. First, a carried
+principal binds the act: the caller must hold the act, must be
+the human the act names (compared under a case/whitespace
+folding — the RT-25 lesson applied to caller identity), and
+must record it under their own role. Second, incident reads
+are existence-hidden for roles without incident scope: the
+answer for a real id is byte-identical to the answer for an
+invented one on every read surface, and lists filter rather
+than refuse, so neither existence nor counts leak. Third,
+every refusal is an insert-only denial artefact (migration
+0010) recorded before the error propagates, in a log that is
+itself a guarded read surface. The round also closed the red
+team's RT-17 by decision: the Round 4 closure surface — the
+one act surface that predated the Round 7 gate — now applies
+the gate's preconditions (complete confirmation of record, no
+open work-order position) to principal-carrying calls,
+refusing with the unmet preconditions named, while its
+principal-less local path and the R4 accuracy-ledger contract
+are unchanged. The stated scope limit is the portfolio's:
+enforcement governs calls that carry a principal; identity
+termination in deployment is AgentCore Identity's layer, in
+front of these surfaces.
 
 ## Stores
 

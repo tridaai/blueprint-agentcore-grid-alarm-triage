@@ -30,8 +30,8 @@ The promises are precise, and they are enforced in code:
   notify shapes only. A source-scanning test proves no
   control-shaped tool exists in the registry — a switching,
   reclosing, shedding or setpoint tool cannot be added without
-  failing the gate. (Round 11 adds the AgentCore Policy pack as the
-  platform layer of the same law.)
+  failing the gate. (A later round adds the AgentCore Policy pack as
+  the platform layer of the same law.)
 - **Correlation is rules, not vibes.** Alarm-to-incident grouping
   runs a versioned correlation pack over versioned topology data.
   Every incident records the exact alarm ids **and the rule ids**
@@ -483,6 +483,65 @@ zero-tolerance eval counter.
   handover carries, so a figure-preserving artefact (a crew
   note) does not stale it and a section-moving one does.
 
+## What Round 11 builds
+
+Round 11 answers the question Rounds 1–10 never asked: *who is
+calling?* The act packs always named their humans and roles, but
+the surfaces took actor strings on trust, and an incident id was
+a capability — anyone who could guess one could read the file.
+This round adds the registry the rest of the system checks
+against, in the repo's usual shape: a versioned pack, a
+fail-closed judge, and every refusal recorded as an artefact.
+
+- **The access pack (2026.10.1)** states, per control-room role,
+  the surfaces the role may read and the acts it may perform.
+  An act's grant never exceeds the engine pack that judges the
+  act itself — restoration signals stay a dispatcher/operator
+  act, field updates stay a field_crew/dispatcher/operator act —
+  and where both layers judge, both must pass.
+
+  | Role | Reads | Acts |
+  | --- | --- | --- |
+  | operator | the working record (all but the denial log) | all control-room acts |
+  | duty_manager | the working record + the denial log | the operator's acts, except recording signals and posting field updates (the engine packs reserve those) |
+  | dispatcher | incidents, alarms, severity, ETR, work orders, field updates, restoration, storm, console, topology | ingest, field updates, restoration signals, confirming restoration |
+  | field_crew | work orders only | field updates, work-order completion |
+  | auditor | everything, including the denial log | none — oversight is a read |
+
+- **Principals are carried, and judged as carried.** The API
+  takes `X-Principal-Id` / `X-Principal-Role` headers, the
+  Runtime a `principal` object, the services a `principal=`
+  argument. A padded or partial pair is malformed, an unknown
+  role is refused by name — never trimmed into validity, never
+  defaulted. A carried principal must also *be* the human the
+  act names (case/whitespace variants are the same person) and
+  must record the act under its own role.
+- **Incident reads are existence-hidden.** A principal whose
+  role has no incident scope — a field crew, whose surface is
+  its work orders — gets, for any incident id on every
+  incident-scoped read surface, exactly the response a
+  non-existent incident earns, byte for byte (graded). List
+  surfaces filter instead of refusing: an empty list, never a
+  count.
+- **Every refusal is an artefact.** Denials land in an
+  insert-only denial log (migration 0010) *before* the error
+  propagates — principal, role, surface, the target the
+  requester supplied, the reason, the pack version. The log is
+  itself a guarded surface (auditor, duty_manager), and a
+  denial over a hidden incident records only the requested id
+  string, never whether the incident exists.
+- **RT-17 is closed by decision.** The Round 4 closure surface
+  predates the Round 7 gate and was callable by anyone who
+  reached it. Where a principal is carried, it now requires
+  the pack's close act, the closure's named operator, and the
+  gate's preconditions — a complete restoration confirmation
+  of record and no open work-order position — or it refuses
+  naming them. The gated close remains the way to close
+  anything short of that position (it alone can waive an order
+  with a reason). The principal-less path is unchanged, and
+  the decision is recorded as an amendment in
+  `docs/red-team.md`.
+
 ## Quick start
 
 ```bash
@@ -567,10 +626,20 @@ What is built and what is not, plainly:
   after a handover does not stale it (the storm section is
   the fold at the handover's own moment), correlation
   chaining grows an incident's span by the pack's stated
-  nearest-member rule, and the R4 closure surface is not
-  itself restoration-gated (hardened this round; gating it
-  is a product decision).
-- **The AgentCore Policy pack is Round 11.** In R1, Law 1 (no
+  nearest-member rule, and the R4 closure surface was not
+  itself restoration-gated. Round 11 closed that third
+  finding by decision (above); the other two stand.
+- **Access control governs principal-carrying calls
+  (Round 11).** A call that carries no principal — the CLI,
+  the local harness — is the trusted local operations path,
+  exactly as it has been since Round 1; the pack judges every
+  call that presents a caller. In a deployment, AgentCore
+  Identity terminates caller identity in front of these
+  surfaces and every call presents one. The pack governs
+  *authorisation* — which role may read and do what; *who* a
+  principal id belongs to is the identity layer's question,
+  not this repo's.
+- **The AgentCore Policy pack is a later round.** In R1, Law 1 (no
   control) is enforced by the tool catalogue's construction and
   the registry scan; the Cedar policy pack at the Gateway is the
   platform layer, added with the Gateway port.
@@ -597,12 +666,13 @@ src/grid_triage/   models, topology, correlation, services (ingest),
                    roster / etr / closure (R4), work_orders (R5),
                    revisions (R6), restoration (R7), storm (R8),
                    board / handover / static console (R9),
-                   runtime_app / runtime_main (AgentCore Runtime),
+                   access (R11), runtime_app / runtime_main
+                   (AgentCore Runtime),
                    api, demo, cli, local_invoke, wiring, config
 data/topology/     versioned territory data (v1.json, v2.json)
 data/roster/       versioned crew roster artefact (v1.json)
 migrations/        numbered SQL migrations, sqlite + postgres trees
-tests/             pytest suite (205 tests through R9)
+tests/             pytest suite (233 tests through R11)
 evals/             the eval gate (run_evals.py)
 scripts/           check_console.py — the console correctness check
 docs/              architecture.md — the honest AgentCore mapping
