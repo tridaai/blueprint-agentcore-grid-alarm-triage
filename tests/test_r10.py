@@ -403,11 +403,25 @@ def test_rt15_characterises_the_handover_storm_moment(fed):
 
 
 def test_rt16_characterises_correlation_span_chaining():
-    """Open finding RT-16: the pack's window is applied to the
-    nearest member, so consequence alarms chain an incident's
-    membership span without bound — but anchors are placed
-    before consequences, so two faults never merge into one
-    incident. This test pins both halves of that behaviour."""
+    """Finding RT-16, as Round 12 settled it. The original
+    characterisation: the pack's window is applied to the
+    nearest member, so consequence alarms chained an incident's
+    membership span without bound — while anchors are placed
+    before consequences, so two faults never merged into one
+    incident. Round 12 adopted the span cap as correlation pack
+    2026.10.2, so this test now pins the deliberate change, in
+    both directions: under the current pack the same ladder is
+    capped at four hours from the anchor (the sags beyond it
+    uncorrelated with the named reason, the second trip still
+    its own incident), and under the kept 2026.10.1 pack the
+    ladder re-performs uncapped, exactly as it was computed
+    when that pack was current. The full grading lives in
+    tests/test_r12.py; this test stays the finding's pin."""
+    from grid_triage.correlation import (
+        CORRELATION_PACK_V1,
+        REASON_BEYOND_SPAN,
+    )
+
     view = TopologyView(load_topology_file("v1"))
     alarms = [_alarm("A1", "BRK-070", "FDR-07", "breaker_trip", T0)]
     t = T0
@@ -416,13 +430,30 @@ def test_rt16_characterises_correlation_span_chaining():
         alarms.append(_alarm(f"B{i}", "SEC-072", "FDR-07", "voltage_sag", t))
     alarms.append(_alarm("A2", "BRK-070", "FDR-07", "breaker_trip",
                          t + timedelta(minutes=9)))
+
+    def span_of(result, incident_id):
+        return max(
+            a.raised_at for a in alarms
+            if any(m.alarm_id == a.alarm_id and m.incident_id == incident_id
+                   for m in result.memberships)
+        )
+
     result = correlate(alarms, view, incident_id_for=lambda a: f"INC-{a.alarm_id}")
     assert {i.incident_id for i in result.incidents} == {"INC-A1", "INC-A2"}
     a2_members = {m.alarm_id for m in result.memberships if m.incident_id == "INC-A2"}
     assert a2_members == {"A2"}
-    a1_span = max(
-        a.raised_at for a in alarms
-        if any(m.alarm_id == a.alarm_id and m.incident_id == "INC-A1"
-               for m in result.memberships)
+    # The cap: no member lies more than four hours from A1.
+    assert span_of(result, "INC-A1") <= T0 + timedelta(hours=4)
+    # And the first refused sag — the one the window still
+    # reaches (nine minutes past the last member) and the cap
+    # alone refuses — is visible with the cap's named reason.
+    # Past it the chain is broken, so the window rule speaks
+    # for the later sags in its own words.
+    assert result.uncorrelated_reasons.get("B26") == REASON_BEYOND_SPAN
+
+    # The historical pack re-performs unchanged: uncapped.
+    legacy = correlate(
+        alarms, view, CORRELATION_PACK_V1,
+        incident_id_for=lambda a: f"INC-{a.alarm_id}",
     )
-    assert a1_span > T0 + timedelta(hours=4)  # the chain, characterised
+    assert span_of(legacy, "INC-A1") > T0 + timedelta(hours=4)
