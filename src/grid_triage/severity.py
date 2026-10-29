@@ -35,6 +35,12 @@ import hashlib
 import json
 from datetime import datetime
 
+from grid_triage.access import (
+    ACT_ACKNOWLEDGE_SEVERITY,
+    ACT_ASSESS_SEVERITY,
+    Principal,
+    guard_act,
+)
 from grid_triage.evidence import EvidenceChain, canonical_json
 from grid_triage.models import (
     Alarm,
@@ -256,7 +262,19 @@ class SeverityService:
     def history(self, incident_id: str) -> list[SeverityAssessment]:
         return self.store.list_severity_assessments(incident_id)
 
-    def assess(self, incident_id: str, as_of: datetime) -> SeverityAssessment:
+    def assess(
+        self,
+        incident_id: str,
+        as_of: datetime,
+        principal: Principal | None = None,
+    ) -> SeverityAssessment:
+        guard_act(
+            self,
+            principal,
+            ACT_ASSESS_SEVERITY,
+            target=incident_id,
+            at=as_of,
+        )
         incident = self.store.get_incident(incident_id)
         if incident is None:
             raise KeyError(f"no such incident: {incident_id}")
@@ -344,7 +362,17 @@ class SeverityService:
         acknowledged_by: str,
         role: str,
         acknowledged_at: datetime,
+        principal: Principal | None = None,
     ) -> SeverityAcknowledgement:
+        guard_act(
+            self,
+            principal,
+            ACT_ACKNOWLEDGE_SEVERITY,
+            target=assessment_id,
+            actor=acknowledged_by,
+            act_role=role,
+            at=acknowledged_at,
+        )
         assessment = self.store.get_severity_assessment(assessment_id)
         if assessment is None:
             raise KeyError(f"no such assessment: {assessment_id}")

@@ -43,6 +43,7 @@ import re
 from datetime import datetime
 from typing import Protocol
 
+from grid_triage.access import ACT_SEED_HISTORY, Principal, guard_act
 from grid_triage.cause import CauseService
 from grid_triage.evidence import canonical_json
 from grid_triage.models import MemoryRecord
@@ -203,9 +204,12 @@ class MemoryService:
         self.cause = cause
         self.severity = severity
 
-    def load_history(self) -> list[MemoryRecord]:
+    def load_history(
+        self, principal: Principal | None = None
+    ) -> list[MemoryRecord]:
         """Insert the planted historical records (idempotent —
         identical re-inserts are no-ops)."""
+        guard_act(self, principal, ACT_SEED_HISTORY)
         from grid_triage.seed import history_records
 
         return [self.memory.put_record(r) for r in history_records()]

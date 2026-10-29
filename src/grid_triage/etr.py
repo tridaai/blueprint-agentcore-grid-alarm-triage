@@ -36,6 +36,7 @@ import hashlib
 import json
 from datetime import datetime, timedelta
 
+from grid_triage.access import ACT_ESTIMATE_ETR, Principal, guard_act
 from grid_triage.cause import UNKNOWN, CauseService
 from grid_triage.evidence import EvidenceChain, canonical_json
 from grid_triage.models import Alarm, CauseClassification, EtrEstimate, Incident
@@ -376,7 +377,15 @@ class EtrService:
     def history(self, incident_id: str) -> list[EtrEstimate]:
         return self.store.list_etr_estimates(incident_id)
 
-    def estimate(self, incident_id: str, as_of: datetime) -> EtrEstimate:
+    def estimate(
+        self,
+        incident_id: str,
+        as_of: datetime,
+        principal: Principal | None = None,
+    ) -> EtrEstimate:
+        guard_act(
+            self, principal, ACT_ESTIMATE_ETR, target=incident_id, at=as_of
+        )
         incident = self.store.get_incident(incident_id)
         if incident is None:
             raise KeyError(f"no such incident: {incident_id}")

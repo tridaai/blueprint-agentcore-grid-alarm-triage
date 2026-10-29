@@ -34,6 +34,7 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime
 
+from grid_triage.access import ACT_CLASSIFY, Principal, guard_act
 from grid_triage.evidence import EvidenceChain, canonical_json
 from grid_triage.models import Alarm, CauseClassification, Incident
 
@@ -146,8 +147,14 @@ class CauseService:
         return self.store.get_cause_classification(incident_id)
 
     def classify(
-        self, incident_id: str, classified_at: datetime
+        self,
+        incident_id: str,
+        classified_at: datetime,
+        principal: Principal | None = None,
     ) -> CauseClassification:
+        guard_act(
+            self, principal, ACT_CLASSIFY, target=incident_id, at=classified_at
+        )
         incident = self.store.get_incident(incident_id)
         if incident is None:
             raise KeyError(f"no such incident: {incident_id}")

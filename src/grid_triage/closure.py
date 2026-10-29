@@ -36,6 +36,7 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime
 
+from grid_triage.access import ACT_CLOSE_INCIDENT, Principal, control_for
 from grid_triage.evidence import EvidenceChain, canonical_json
 from grid_triage.memory import MemoryService
 from grid_triage.models import EtrOutcome, IncidentClosure, MemoryRecord
@@ -87,7 +88,56 @@ class ClosureService:
         restored_at: datetime,
         resolution_summary: str,
         recorded_at: datetime,
+        principal: Principal | None = None,
     ) -> tuple[IncidentClosure, EtrOutcome, MemoryRecord]:
+        if principal is not None:
+            # RT-17, closed by Round 11 decision (see
+            # docs/red-team.md, amendment). This surface predates
+            # the Round 7 gate: it records closure facts and
+            # grades the ETR ledger, and until Round 11 anyone
+            # who could reach it could close an incident — no
+            # confirmation, no work-order position, no check on
+            # who was calling. The decision: a principal-carrying
+            # call on this surface stands under the same
+            # discipline as the gated close. The caller must hold
+            # the access pack's close act, must BE the operator
+            # the closure names, recorded under their own role —
+            # and the Round 7 gate's preconditions must hold
+            # (a complete restoration confirmation of record and
+            # no open work-order position), or the call refuses
+            # naming them. The gated surface remains the way to
+            # close anything short of that position: it can waive
+            # an order with a reason, which this surface cannot
+            # express. A principal-less call is the trusted local
+            # path, unchanged since Round 4 — the seeded history
+            # and the ETR accuracy ledger depend on it, and the
+            # gated close calls this service internally as an
+            # already-judged step (its own door enforces the
+            # gated-close act; see restoration.py).
+            control = control_for(self)
+            control.require_act(
+                principal,
+                ACT_CLOSE_INCIDENT,
+                target=incident_id,
+                at=recorded_at,
+            )
+            control.require_actor(
+                principal,
+                closed_by,
+                act=ACT_CLOSE_INCIDENT,
+                target=incident_id,
+                at=recorded_at,
+            )
+            control.require_role_match(
+                principal,
+                role,
+                act=ACT_CLOSE_INCIDENT,
+                target=incident_id,
+                at=recorded_at,
+            )
+            gate_problems = self._carried_gate_problems(incident_id)
+            if gate_problems:
+                raise ClosureRefusal(gate_problems)
         incident = self.store.get_incident(incident_id)
         if incident is None:
             raise KeyError(f"no such incident: {incident_id}")
@@ -194,6 +244,63 @@ class ClosureService:
             item_id=f"EV-{outcome.outcome_id}",
         )
         return closure, outcome, record
+
+    def _carried_gate_problems(self, incident_id: str) -> list[str]:
+        """The Round 7 gate's preconditions, read from the store,
+        for a principal-carrying call on this surface (RT-17).
+        Mirrors RestorationService.close_incident's position
+        derivation exactly: the confirmation of record is the
+        latest computed; the work-order position is the head
+        order's — a rejected head carries no open work, an order
+        with a completion is done, and anything else open must be
+        closed through the gated surface, which alone can waive
+        an order with a reason. A missing incident defers to the
+        engine's own KeyError below (returns no problems)."""
+        if self.store.get_incident(incident_id) is None:
+            return []
+        problems: list[str] = []
+        confirmations = self.store.list_restoration_confirmations(
+            incident_id
+        )
+        latest = confirmations[-1] if confirmations else None
+        if latest is None:
+            problems.append(
+                f"no restoration confirmation has been computed for"
+                f" incident {incident_id} — under a carried principal"
+                " this surface requires the Round 7 gate's"
+                " preconditions: a complete restoration"
+                " confirmation of record, or a close through the"
+                " gated surface"
+            )
+        elif latest.status != "complete":
+            missing = ", ".join(latest.missing_classes) or "none named"
+            problems.append(
+                f"restoration confirmation {latest.confirmation_id}"
+                f" is {latest.status} (missing evidence classes:"
+                f" {missing}; devices still out:"
+                f" {latest.outstanding_devices}) — under a carried"
+                " principal this surface requires a complete"
+                " confirmation; a partial restoration is split or"
+                " closed through the gated surface"
+            )
+        orders = self.store.list_work_orders(incident_id)
+        if orders:
+            head = orders[-1]
+            decisions = self.store.list_work_order_decisions(head.order_id)
+            decision = decisions[-1].decision if decisions else None
+            completions = self.store.list_work_order_completions(
+                head.order_id
+            )
+            if decision != "rejected" and not completions:
+                state = decision or "draft"
+                problems.append(
+                    f"work order {head.order_id} is {state} with no"
+                    " completion recorded — complete it, or close"
+                    " through the gated surface, which can waive an"
+                    " order with a reason; this surface cannot"
+                    " express a waiver"
+                )
+        return problems
 
     def accuracy_ledger(self) -> dict:
         """Running ETR error statistics per cause class, computed

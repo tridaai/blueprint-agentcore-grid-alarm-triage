@@ -50,6 +50,15 @@ import copy
 import hashlib
 from datetime import datetime
 
+from grid_triage.access import (
+    ACT_ASSIGN_WORK_ORDER,
+    ACT_COMPLETE_WORK_ORDER,
+    ACT_DECIDE_WORK_ORDER,
+    ACT_DRAFT_WORK_ORDER,
+    ACT_REVISE_WORK_ORDER,
+    Principal,
+    guard_act,
+)
 from grid_triage.cause import CauseService
 from grid_triage.etr import EtrService
 from grid_triage.evidence import EvidenceChain, canonical_json
@@ -383,8 +392,20 @@ class WorkOrderService:
 
     # -- acts -----------------------------------------------------------
     def draft(
-        self, incident_id: str, as_of: datetime, drafted_by: str = SYSTEM_DRAFTER
+        self,
+        incident_id: str,
+        as_of: datetime,
+        drafted_by: str = SYSTEM_DRAFTER,
+        principal: Principal | None = None,
     ) -> WorkOrder:
+        guard_act(
+            self,
+            principal,
+            ACT_DRAFT_WORK_ORDER,
+            target=incident_id,
+            actor=drafted_by,
+            at=as_of,
+        )
         incident = self.store.get_incident(incident_id)
         if incident is None:
             raise KeyError(f"no such incident: {incident_id}")
@@ -432,7 +453,16 @@ class WorkOrderService:
         as_of: datetime,
         operator_note: str | None = None,
         extra_materials: list[dict] | None = None,
+        principal: Principal | None = None,
     ) -> WorkOrder:
+        guard_act(
+            self,
+            principal,
+            ACT_REVISE_WORK_ORDER,
+            target=order_id,
+            actor=revised_by,
+            at=as_of,
+        )
         parent = self.store.get_work_order(order_id)
         if parent is None:
             raise KeyError(f"no such work order: {order_id}")
@@ -483,7 +513,16 @@ class WorkOrderService:
         window_start: datetime,
         window_end: datetime,
         assigned_at: datetime,
+        principal: Principal | None = None,
     ) -> WorkOrderAssignment:
+        guard_act(
+            self,
+            principal,
+            ACT_ASSIGN_WORK_ORDER,
+            target=order_id,
+            actor=assigned_by,
+            at=assigned_at,
+        )
         order = self.store.get_work_order(order_id)
         if order is None:
             raise KeyError(f"no such work order: {order_id}")
@@ -584,7 +623,17 @@ class WorkOrderService:
         role: str,
         decided_at: datetime,
         reason: str | None = None,
+        principal: Principal | None = None,
     ) -> tuple[WorkOrderDecision, list[Notification]]:
+        guard_act(
+            self,
+            principal,
+            ACT_DECIDE_WORK_ORDER,
+            target=order_id,
+            actor=decided_by,
+            act_role=role,
+            at=decided_at,
+        )
         order = self.store.get_work_order(order_id)
         if order is None:
             raise KeyError(f"no such work order: {order_id}")
@@ -666,6 +715,7 @@ class WorkOrderService:
         role: str,
         completed_at: datetime,
         note: str | None = None,
+        principal: Principal | None = None,
     ) -> WorkOrderCompletion:
         """Record that the field work on an approved order is done
         (Round 7). A named act against the current, approved
@@ -673,6 +723,15 @@ class WorkOrderService:
         version never had any, a superseded version's completion
         would pin the wrong artefact, and a completion is recorded
         once — the fact does not get recorded twice."""
+        guard_act(
+            self,
+            principal,
+            ACT_COMPLETE_WORK_ORDER,
+            target=order_id,
+            actor=completed_by,
+            act_role=role,
+            at=completed_at,
+        )
         order = self.store.get_work_order(order_id)
         if order is None:
             raise KeyError(f"no such work order: {order_id}")

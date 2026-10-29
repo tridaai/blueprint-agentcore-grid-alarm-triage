@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from grid_triage.access import AccessControl
 from grid_triage.agent import IncidentAssembler, model_for_profile
 from grid_triage.board import BoardService
 from grid_triage.cause import CauseService
@@ -126,6 +127,32 @@ class Services:
             memory=self.memory,
             etr=self.etr,
         )
+        # Round 11: the access control — one judge over the
+        # store's denial log, bound onto every act-recording
+        # service so a principal-carrying call is judged by the
+        # service it lands on. The surfaces reach it as
+        # `svc.access`; services reached without this wiring
+        # build their own over their store on first use
+        # (access.control_for), over the same log.
+        self.access = AccessControl(self.store)
+        for service in (
+            self.intake,
+            self.assembler,
+            self.cause,
+            self.severity,
+            self.etr,
+            self.packs,
+            self.work_orders,
+            self.closure,
+            self.restoration,
+            self.storm,
+            self.updates,
+            self.topology_acts,
+            self.revisions,
+            self.handover,
+            self.memory,
+        ):
+            service.access = self.access
 
 
 def build_services(settings: Settings | None = None) -> Services:

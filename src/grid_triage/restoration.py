@@ -58,6 +58,14 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime
 
+from grid_triage.access import (
+    ACT_CONFIRM_RESTORATION,
+    ACT_GATED_CLOSE,
+    ACT_RECORD_SIGNAL,
+    ACT_SPLIT_INCIDENT,
+    Principal,
+    guard_act,
+)
 from grid_triage.closure import ClosureRefusal, ClosureService
 from grid_triage.evidence import EvidenceChain, canonical_json
 from grid_triage.models import (
@@ -154,7 +162,17 @@ class RestorationService:
         state: str,
         device_id: str | None = None,
         feeder_id: str | None = None,
+        principal: Principal | None = None,
     ) -> RestorationSignal:
+        guard_act(
+            self,
+            principal,
+            ACT_RECORD_SIGNAL,
+            target=incident_id,
+            actor=recorded_by,
+            act_role=role,
+            at=observed_at,
+        )
         incident = self.store.get_incident(incident_id)
         if incident is None:
             raise KeyError(f"no such incident: {incident_id}")
@@ -321,11 +339,21 @@ class RestorationService:
         return ids
 
     def confirm(
-        self, incident_id: str, computed_at: datetime
+        self,
+        incident_id: str,
+        computed_at: datetime,
+        principal: Principal | None = None,
     ) -> RestorationConfirmation:
         """Compute the incident's restoration position from the
         recorded signals and store it as a new confirmation
         artefact (an identical recomputation is a no-op)."""
+        guard_act(
+            self,
+            principal,
+            ACT_CONFIRM_RESTORATION,
+            target=incident_id,
+            at=computed_at,
+        )
         incident = self.store.get_incident(incident_id)
         if incident is None:
             raise KeyError(f"no such incident: {incident_id}")
@@ -466,7 +494,25 @@ class RestorationService:
         resolution_summary: str,
         waivers: dict[str, str] | None = None,
         recorded_at: datetime | None = None,
+        principal: Principal | None = None,
     ) -> tuple[IncidentCloseAct, object, object, object]:
+        # Round 11: the gated close is an act surface — a carried
+        # principal is judged at this door (the access pack's
+        # gated-close act, the named closer, their own role)
+        # before the gate's own preconditions run. The internal
+        # call into ClosureService below is an already-judged
+        # step and deliberately carries no principal: the Round 4
+        # surface's principal-carried gate (RT-17) is for direct
+        # callers of that surface.
+        guard_act(
+            self,
+            principal,
+            ACT_GATED_CLOSE,
+            target=incident_id,
+            actor=closed_by,
+            act_role=role,
+            at=recorded_at,
+        )
         """Close an incident through the gate. Returns (close act,
         R4 closure, ETR outcome, memory record) — the R4 artefacts
         are produced by the R4 closure service itself; this act
@@ -608,7 +654,17 @@ class RestorationService:
         split_by: str,
         role: str,
         split_at: datetime,
+        principal: Principal | None = None,
     ) -> IncidentSplit:
+        guard_act(
+            self,
+            principal,
+            ACT_SPLIT_INCIDENT,
+            target=incident_id,
+            actor=split_by,
+            act_role=role,
+            at=split_at,
+        )
         incident = self.store.get_incident(incident_id)
         if incident is None:
             raise KeyError(f"no such incident: {incident_id}")

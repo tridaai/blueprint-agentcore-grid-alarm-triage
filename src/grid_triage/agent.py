@@ -34,6 +34,7 @@ import re
 from datetime import datetime
 from typing import Any, Protocol
 
+from grid_triage.access import ACT_ASSEMBLE_BRIEF, Principal, guard_act
 from grid_triage.cause import CAUSE_PACK, CauseService
 from grid_triage.evidence import EvidenceChain
 from grid_triage.models import BriefStatement, Citation, IncidentBrief
@@ -586,7 +587,19 @@ class IncidentAssembler:
         return facts
 
     # -- the step ------------------------------------------------------
-    def assemble(self, incident_id: str, now: datetime) -> IncidentBrief:
+    def assemble(
+        self,
+        incident_id: str,
+        now: datetime,
+        principal: Principal | None = None,
+    ) -> IncidentBrief:
+        # Round 11: assembling a brief is an act — judged here, at
+        # the door. The derivation steps inside (classify, assess,
+        # estimate) are this service's own machinery and run
+        # principal-less, as internal steps of a judged act.
+        guard_act(
+            self, principal, ACT_ASSEMBLE_BRIEF, target=incident_id, at=now
+        )
         incident = self.store.get_incident(incident_id)
         if incident is None:
             raise KeyError(f"no such incident: {incident_id}")

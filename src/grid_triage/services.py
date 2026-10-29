@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from grid_triage.access import ACT_INGEST, Principal, guard_act
 from grid_triage.correlation import correlate
 from grid_triage.evidence import EvidenceChain
 from grid_triage.models import Alarm, Incident
@@ -27,7 +28,10 @@ class IngestService:
     def __init__(self, store):
         self.store = store
 
-    def ingest(self, alarms: list[Alarm]) -> int:
+    def ingest(
+        self, alarms: list[Alarm], principal: Principal | None = None
+    ) -> int:
+        guard_act(self, principal, ACT_INGEST)
         count = 0
         for alarm in alarms:
             if self.store.get_alarm(alarm.alarm_id) is not None:
@@ -36,8 +40,10 @@ class IngestService:
             count += 1
         return count
 
-    def ingest_feed(self, alarms: list[Alarm]) -> int:
-        return self.ingest(alarms)
+    def ingest_feed(
+        self, alarms: list[Alarm], principal: Principal | None = None
+    ) -> int:
+        return self.ingest(alarms, principal=principal)
 
 
 def incident_id_for(anchor: Alarm) -> str:

@@ -55,6 +55,14 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime
 
+from grid_triage.access import (
+    ACT_COMPUTE_STORM_REVIEW,
+    ACT_DECLARE_STORM,
+    ACT_EXTEND_STORM,
+    ACT_STAND_DOWN_STORM,
+    Principal,
+    guard_act,
+)
 from grid_triage.evidence import canonical_json
 from grid_triage.models import StormDeclaration, StormReview
 
@@ -418,7 +426,16 @@ class StormService:
         declared_at: datetime,
         feeders: list[str] | None = None,
         region: str | None = None,
+        principal: Principal | None = None,
     ) -> StormDeclaration:
+        guard_act(
+            self,
+            principal,
+            ACT_DECLARE_STORM,
+            actor=declared_by,
+            act_role=role,
+            at=declared_at,
+        )
         feeders = list(feeders or [])
         problems = self._actor_problems(declared_by, role, reason, "declaration")
         for conflict in self._scope_conflicts(feeders, declared_at, None):
@@ -478,7 +495,17 @@ class StormService:
         declared_at: datetime,
         feeders: list[str] | None = None,
         region: str | None = None,
+        principal: Principal | None = None,
     ) -> StormDeclaration:
+        guard_act(
+            self,
+            principal,
+            ACT_EXTEND_STORM,
+            target=declaration_id,
+            actor=declared_by,
+            act_role=role,
+            at=declared_at,
+        )
         problems = self._actor_problems(declared_by, role, reason, "extension")
         window, found = self._window_for_act(declaration_id, "extension")
         problems.extend(found)
@@ -564,7 +591,17 @@ class StormService:
         role: str,
         reason: str,
         declared_at: datetime,
+        principal: Principal | None = None,
     ) -> StormDeclaration:
+        guard_act(
+            self,
+            principal,
+            ACT_STAND_DOWN_STORM,
+            target=declaration_id,
+            actor=declared_by,
+            act_role=role,
+            at=declared_at,
+        )
         problems = self._actor_problems(declared_by, role, reason, "stand-down")
         window, found = self._window_for_act(declaration_id, "stand-down")
         problems.extend(found)
@@ -654,11 +691,23 @@ class StormService:
         return sorted(i.incident_id for i in incidents), figures
 
     def compute_review(
-        self, declaration_id: str, computed_by: str, computed_at: datetime
+        self,
+        declaration_id: str,
+        computed_by: str,
+        computed_at: datetime,
+        principal: Principal | None = None,
     ) -> StormReview:
         """Assemble the post-storm review of one window. Only
         after stand-down: a review of a window still open would
         grade a record that is still being written."""
+        guard_act(
+            self,
+            principal,
+            ACT_COMPUTE_STORM_REVIEW,
+            target=declaration_id,
+            actor=computed_by,
+            at=computed_at,
+        )
         problems: list[str] = []
         if not computed_by or not computed_by.strip():
             problems.append("a post-storm review names who computes it")

@@ -36,6 +36,13 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime
 
+from grid_triage.access import (
+    ACT_DECLARE_TOPOLOGY,
+    ACT_POST_FIELD_UPDATE,
+    ACT_RECORRELATE,
+    Principal,
+    guard_act,
+)
 from grid_triage.cause import CauseService
 from grid_triage.correlation import correlate
 from grid_triage.etr import EtrService
@@ -251,7 +258,17 @@ class FieldUpdateService:
         device_id: str | None = None,
         finding: str | None = None,
         alarm: Alarm | None = None,
+        principal: Principal | None = None,
     ) -> FieldUpdate:
+        guard_act(
+            self,
+            principal,
+            ACT_POST_FIELD_UPDATE,
+            target=incident_id,
+            actor=reported_by,
+            act_role=role,
+            at=reported_at,
+        )
         incident = self.store.get_incident(incident_id)
         if incident is None:
             raise KeyError(f"no such incident: {incident_id}")
@@ -361,7 +378,17 @@ class TopologyService:
         role: str,
         declared_at: datetime,
         effective_at: datetime,
+        principal: Principal | None = None,
     ) -> TopologyDeclaration:
+        guard_act(
+            self,
+            principal,
+            ACT_DECLARE_TOPOLOGY,
+            target=version,
+            actor=declared_by,
+            act_role=role,
+            at=declared_at,
+        )
         problems: list[str] = []
         if version not in self.pack["declarable_versions"]:
             problems.append(
@@ -478,7 +505,17 @@ class RevisionService:
         recorrelated_by: str,
         role: str,
         recorrelated_at: datetime,
+        principal: Principal | None = None,
     ) -> IncidentRevision:
+        guard_act(
+            self,
+            principal,
+            ACT_RECORRELATE,
+            target=incident_id,
+            actor=recorrelated_by,
+            act_role=role,
+            at=recorrelated_at,
+        )
         incident = self.store.get_incident(incident_id)
         if incident is None:
             raise KeyError(f"no such incident: {incident_id}")

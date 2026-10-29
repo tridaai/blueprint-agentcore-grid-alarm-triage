@@ -34,6 +34,7 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime
 
+from grid_triage.access import ACT_SEAL_PACK, Principal, guard_act
 from grid_triage.cause import CauseService
 from grid_triage.evidence import EvidenceChain, canonical_json
 from grid_triage.memory import MemoryService
@@ -224,8 +225,20 @@ class EvidencePackService:
 
     # -- the acts --------------------------------------------------------
     def seal(
-        self, incident_id: str, sealed_by: str, sealed_at: datetime
+        self,
+        incident_id: str,
+        sealed_by: str,
+        sealed_at: datetime,
+        principal: Principal | None = None,
     ) -> EvidencePack:
+        guard_act(
+            self,
+            principal,
+            ACT_SEAL_PACK,
+            target=incident_id,
+            actor=sealed_by,
+            at=sealed_at,
+        )
         incident = self.store.get_incident(incident_id)
         if incident is None:
             raise KeyError(f"no such incident: {incident_id}")

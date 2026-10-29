@@ -42,6 +42,12 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime
 
+from grid_triage.access import (
+    ACT_ACCEPT_HANDOVER,
+    ACT_ASSEMBLE_HANDOVER,
+    Principal,
+    guard_act,
+)
 from grid_triage.board import BoardService
 from grid_triage.evidence import canonical_json
 from grid_triage.models import HandoverAcceptance, ShiftHandover
@@ -124,8 +130,20 @@ class HandoverService:
         return problems
 
     def assemble(
-        self, handed_over_by: str, role: str, handed_over_at: datetime
+        self,
+        handed_over_by: str,
+        role: str,
+        handed_over_at: datetime,
+        principal: Principal | None = None,
     ) -> ShiftHandover:
+        guard_act(
+            self,
+            principal,
+            ACT_ASSEMBLE_HANDOVER,
+            actor=handed_over_by,
+            act_role=role,
+            at=handed_over_at,
+        )
         """Freeze the room's state into a handover artefact.
         The sections are the board's computation at the
         handover's moment; the artefact is content-addressed
@@ -164,10 +182,20 @@ class HandoverService:
         accepted_by: str,
         role: str,
         accepted_at: datetime,
+        principal: Principal | None = None,
     ) -> HandoverAcceptance:
         """The incoming operator's act, bound to the handover's
         record hash. Refused — with the drift named — when the
         record has moved since the handover was assembled."""
+        guard_act(
+            self,
+            principal,
+            ACT_ACCEPT_HANDOVER,
+            target=handover_id,
+            actor=accepted_by,
+            act_role=role,
+            at=accepted_at,
+        )
         handover = self.store.get_shift_handover(handover_id)
         if handover is None:
             raise KeyError(f"no such shift handover: {handover_id}")
