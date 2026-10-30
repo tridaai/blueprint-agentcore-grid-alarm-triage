@@ -764,6 +764,45 @@ class OversightReport(BaseModel):
     fingerprint: str
 
 
+class IncidentReview(BaseModel):
+    """One post-incident review (Round 15, migration 0014).
+
+    The oversight report is aggregate by construction and names
+    no incident; the handover is a live snapshot that goes
+    stale; nothing else re-performs ONE incident's whole record.
+    This artefact does: struck by a named operator's act over a
+    stated incident, it rebuilds the incident's timeline from
+    its artefacts of record alone — foundation and membership,
+    cause and severity history, the ETR record and its graded
+    outcome, work orders and their acts, the field record
+    (quarantine holds named by id and rule, their text never
+    carried), restoration and closure, and the revision/split
+    lineage — and it grades its own completeness on its face:
+    every element the review pack expects for the incident's
+    state is either present with its artefact ids or absent
+    with a stated reason, so a thin record reads as a thin
+    record, never as a full one. ``fingerprint`` covers the
+    pack version, the incident and the sections; the verifier
+    re-performs every section by an independent walk and names
+    any section that does not recompute. Reviews are
+    insert-only and content-addressed: re-striking over an
+    unmoved record returns the standing artefact, and over a
+    moved record produces the next artefact for the incident,
+    linked by ``supersedes``. A review operates nothing and
+    amends nothing — it is a statement about the record.
+    """
+
+    review_id: str
+    incident_id: str
+    pack_version: str
+    struck_by: str
+    role: str
+    struck_at: datetime
+    supersedes: str | None = None
+    sections: dict = Field(default_factory=dict)
+    fingerprint: str
+
+
 class ModelCallRecord(BaseModel):
     """One insert-only row of the model gateway's cost ledger
     (Round 13, migration 0012). Every call the gateway routes —

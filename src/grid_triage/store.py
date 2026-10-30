@@ -36,6 +36,7 @@ from grid_triage.models import (
     IncidentCloseAct,
     IncidentClosure,
     IncidentMembership,
+    IncidentReview,
     IncidentRevision,
     IncidentSplit,
     IncidentStatus,
@@ -241,6 +242,15 @@ class Store(Protocol):
         self, report_id: str
     ) -> OversightReport | None: ...
     def list_oversight_reports(self) -> list[OversightReport]: ...
+    # incident reviews (Round 15: insert-only artefacts — the
+    # port exposes no update and no delete)
+    def add_incident_review(self, review: IncidentReview) -> None: ...
+    def get_incident_review(
+        self, review_id: str
+    ) -> IncidentReview | None: ...
+    def list_incident_reviews(
+        self, incident_id: str | None = None
+    ) -> list[IncidentReview]: ...
     # topology index
     def load_topology(self, payload: dict, loaded_at: datetime) -> None: ...
     def get_topology_payload(self, version: str) -> dict | None: ...
@@ -1533,3 +1543,44 @@ class SqlStore:
             fetch="all",
         )
         return [OversightReport.model_validate(json.loads(r[0])) for r in rows]
+
+    # -- incident reviews (Round 15) -------------------------------
+    def add_incident_review(self, review: IncidentReview) -> None:
+        self._run(
+            "INSERT INTO incident_reviews"
+            " (review_id, incident_id, act_seq, payload)"
+            " VALUES (?,?,?,?)",
+            (
+                review.review_id,
+                review.incident_id,
+                self._next_seq("incident_reviews"),
+                review.model_dump_json(),
+            ),
+        )
+
+    def get_incident_review(
+        self, review_id: str
+    ) -> IncidentReview | None:
+        row = self._run(
+            "SELECT payload FROM incident_reviews WHERE review_id = ?",
+            (review_id,),
+            fetch="one",
+        )
+        return IncidentReview.model_validate(json.loads(row[0])) if row else None
+
+    def list_incident_reviews(
+        self, incident_id: str | None = None
+    ) -> list[IncidentReview]:
+        if incident_id is None:
+            rows = self._run(
+                "SELECT payload FROM incident_reviews ORDER BY act_seq",
+                fetch="all",
+            )
+        else:
+            rows = self._run(
+                "SELECT payload FROM incident_reviews"
+                " WHERE incident_id = ? ORDER BY act_seq",
+                (incident_id,),
+                fetch="all",
+            )
+        return [IncidentReview.model_validate(json.loads(r[0])) for r in rows]

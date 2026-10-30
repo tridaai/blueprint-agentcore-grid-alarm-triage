@@ -25,6 +25,7 @@ from grid_triage.oversight import OversightService
 from grid_triage.quarantine import QuarantineService
 from grid_triage.packs import EvidencePackService
 from grid_triage.restoration import EventLogService, RestorationService
+from grid_triage.review import IncidentReviewService
 from grid_triage.revisions import FieldUpdateService, RevisionService, TopologyService
 from grid_triage.roster import RosterView, load_roster_file
 from grid_triage.seed import ReferenceFeedAdapter
@@ -134,6 +135,12 @@ class Services:
         # same store. Generation is a named act; the service
         # computes and verifies, it operates nothing.
         self.oversight = OversightService(self.store, self.storm)
+        # Round 15: the post-incident review — the insert-only,
+        # re-performable per-incident artefact over the same
+        # store. Striking is a named act; the service rebuilds
+        # one incident's timeline and grades its completeness,
+        # it operates nothing.
+        self.reviews = IncidentReviewService(self.store)
         # Round 13: the model gateway — the one governed door
         # for the assembler's model call, with its insert-only
         # cost ledger over the same store. The configured profile
@@ -175,6 +182,7 @@ class Services:
             self.revisions,
             self.handover,
             self.oversight,
+            self.reviews,
             self.model_gateway,
             self.quarantine,
             self.memory,
