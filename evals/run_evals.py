@@ -296,6 +296,24 @@ Round 13 counters:
                                  gateway, falling back, or leaving
                                  no error record
 
+Round 15 counters:
+  incident_review_errors         a stored review that does not
+                                 verify through the independent
+                                 path, a headline figure that does
+                                 not re-perform from raw reads, or
+                                 a re-strike over an unmoved
+                                 record that is not a no-op
+  incident_review_completeness_errors
+                                 a bare incident whose review
+                                 does not grade partial with its
+                                 absences named by their reasons
+  incident_review_tamper_errors  a forged review figure or a
+                                 fingerprint drift the verifier
+                                 does not name
+  incident_review_role_errors    a review strike by a read-only
+                                 principal that lands, or whose
+                                 refusal is not on the denial log
+
 Run: uv run python evals/run_evals.py  (exit 0 = GATE: PASS)
 """
 
@@ -2628,7 +2646,137 @@ def main() -> int:
         if _trap_message14 in _seen14b or _trap_message14b in _seen14b:
             counters["quarantine_prompt_leak_errors"] += 1
 
-    print("Evals — grid alarm triage agent (Rounds 1-14)")
+    # -- Round 15: the post-incident review --------------------
+    # On a hermetic deployment: a review over the worked and
+    # closed flood verifies clean, re-performs its headline
+    # figures from raw reads, and grades complete; the bare
+    # incident grades partial with its absences named; a forged
+    # review and a fingerprint drift are named by the verifier;
+    # and the strike act is judged for a carried principal.
+    counters["incident_review_errors"] = 0
+    counters["incident_review_completeness_errors"] = 0
+    counters["incident_review_tamper_errors"] = 0
+    counters["incident_review_role_errors"] = 0
+    from grid_triage.access import Principal as _Principal15
+    from grid_triage.config import Settings as _Settings15
+    from grid_triage.models import IncidentReview as _IncidentReview15
+    from grid_triage.review import fingerprint_of as _fingerprint15
+    from grid_triage.wiring import Services as _Services15
+
+    with tempfile.TemporaryDirectory() as _td15:
+        _tmp15 = Path(_td15)
+        svc15 = _Services15(
+            _Settings15(
+                sqlite_path=str(_tmp15 / "grid15.db"),
+                object_store_dir=str(_tmp15 / "objects15"),
+            )
+        )
+        svc15.intake.ingest_feed(svc15.feed.fetch_alarms())
+        _created15 = svc15.correlator.correlate_new(svc15.topology)
+        _flood15 = next(
+            i for i in _created15 if i.anchor_alarm_id == FLOOD_ALARM_IDS[0]
+        ).incident_id
+        _lone15 = next(
+            i for i in _created15 if i.incident_id != _flood15
+        ).incident_id
+        svc15.cause.classify(_flood15, T0 + timedelta(minutes=35))
+        svc15.severity.assess(_flood15, T0 + timedelta(minutes=30))
+        svc15.etr.estimate(_flood15, T0 + timedelta(minutes=30))
+        svc15.closure.close_incident(
+            _flood15,
+            "op.dana",
+            "operator",
+            T0 + timedelta(hours=3),
+            "restored — eval scenario",
+            T0 + timedelta(hours=3, minutes=5),
+        )
+        _review15 = svc15.reviews.strike(
+            _flood15, "op.dana", "operator", T0 + timedelta(days=2)
+        )
+        if svc15.reviews.verify_review(_review15.review_id):
+            counters["incident_review_errors"] += 1
+        if _review15.sections["foundation"]["member_count"] != len(
+            svc15.store.list_memberships(_flood15)
+        ):
+            counters["incident_review_errors"] += 1
+        if _review15.sections["completeness"]["status"] != "complete":
+            counters["incident_review_errors"] += 1
+        if _review15.sections["etr_record"]["outcome"]["status"] != "compared":
+            counters["incident_review_errors"] += 1
+        _restruck15 = svc15.reviews.strike(
+            _flood15, "op.dana", "operator", T0 + timedelta(days=2, hours=1)
+        )
+        if _restruck15.review_id != _review15.review_id:
+            counters["incident_review_errors"] += 1
+
+        _bare15 = svc15.reviews.strike(
+            _lone15, "op.dana", "operator", T0 + timedelta(days=2)
+        )
+        _comp15 = _bare15.sections["completeness"]
+        if _comp15["status"] != "partial":
+            counters["incident_review_completeness_errors"] += 1
+        _reasons15 = {
+            row["element"]: row["reason"]
+            for row in _comp15["elements"]
+            if row["state"] == "absent"
+        }
+        if _reasons15.get("severity_assessment") != "not_assessed":
+            counters["incident_review_completeness_errors"] += 1
+        if _reasons15.get("closure_record") != "not_closed":
+            counters["incident_review_completeness_errors"] += 1
+        if svc15.reviews.verify_review(_bare15.review_id):
+            counters["incident_review_completeness_errors"] += 1
+
+        _forged_sections15 = json.loads(json.dumps(_review15.sections))
+        _forged_sections15["foundation"]["member_count"] += 1
+        svc15.store.add_incident_review(
+            _IncidentReview15(
+                review_id="IREV-evalforged00001",
+                incident_id=_flood15,
+                pack_version=_review15.pack_version,
+                struck_by="op.dana",
+                role="operator",
+                struck_at=T0 + timedelta(days=2),
+                sections=_forged_sections15,
+                fingerprint=_fingerprint15(
+                    _review15.pack_version, _flood15, _forged_sections15
+                ),
+            )
+        )
+        if not any(
+            "foundation" in p
+            for p in svc15.reviews.verify_review("IREV-evalforged00001")
+        ):
+            counters["incident_review_tamper_errors"] += 1
+        _stale15 = _review15.model_copy(
+            update={
+                "review_id": "IREV-evalforged00002",
+                "fingerprint": "0" * 64,
+            }
+        )
+        svc15.store.add_incident_review(_stale15)
+        if not any(
+            "fingerprint" in p
+            for p in svc15.reviews.verify_review("IREV-evalforged00002")
+        ):
+            counters["incident_review_tamper_errors"] += 1
+
+        _denials15 = svc15.store.count_access_denials()
+        try:
+            svc15.reviews.strike(
+                _flood15,
+                "qa.ives",
+                "auditor",
+                T0 + timedelta(days=2),
+                principal=_Principal15(id="qa.ives", role="auditor"),
+            )
+            counters["incident_review_role_errors"] += 1
+        except AccessDeniedError:
+            pass
+        if svc15.store.count_access_denials() != _denials15 + 1:
+            counters["incident_review_role_errors"] += 1
+
+    print("Evals — grid alarm triage agent (Rounds 1-15)")
     for name, value in counters.items():
         print(f"  {name}: {value} (required 0)")
     failed = [n for n, v in counters.items() if v != 0]

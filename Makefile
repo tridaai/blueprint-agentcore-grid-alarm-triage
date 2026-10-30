@@ -13,7 +13,7 @@
 # No uv? python3 -m venv .venv && source .venv/bin/activate, then:
 #   make install-pip
 
-.PHONY: install install-pip demo test evals reports-check ledger-check quarantine-check serve api invoke
+.PHONY: install install-pip demo test evals reports-check ledger-check quarantine-check reviews-check serve api invoke
 
 install:
 	uv sync --extra dev
@@ -43,6 +43,9 @@ ledger-check:
 
 quarantine-check:
 	uv run python scripts/check_quarantine.py
+
+reviews-check:
+	uv run python scripts/check_reviews.py
 
 serve:
 	uv run grid-agent-serve
