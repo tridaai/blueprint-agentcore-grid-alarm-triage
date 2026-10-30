@@ -795,6 +795,52 @@ control.
   on the topology surface; `make topology-check` grades
   the claims from a planted record, forgeries included.
 
+## What Round 17 builds
+
+Round 16's dual control bound the route the room opened —
+and left the direct act standing beside it, a limit the
+honest status below stated rather than smoothed over.
+Round 17 closes it, in the build's own posture:
+
+- **The pack states the route; the direct act refuses
+  (topology pack 2026.10.2).** The new pack version carries
+  the posture as data — `declaration_route:
+  dual_control_only` — and the direct declaration act
+  refuses every attempt under it, naming the governed
+  route (propose the version; a second operator decides),
+  whether or not a proposal stands, whoever signs, and
+  after a rejection as after a confirmation. A refused
+  attempt strikes nothing and loads nothing. The access
+  guard still judges the act first: an ungranted principal
+  is denied and logged at that door; a granted one meets
+  the closure behind it. The 2026.10.1 pack is kept
+  verbatim — it carries no route key and keeps the pre-R17
+  posture, and a declaration is judged by the pack it was
+  struck under, as the correlation pack has always ruled.
+- **The closure governs new declarations.** A standing
+  direct declaration struck under the earlier pack stays
+  exactly what it was: read by the current services,
+  verified, and re-correlated under, unchanged. Nothing
+  about its standing is rewritten — the tightening binds
+  what this build strikes now, not what the record holds.
+- **Every standing declaration now verifies.**
+  `verify_proposal` re-performed a proposal and the
+  declaration its confirmation struck; a declaration
+  naming no proposal had no verifier, so the remaining
+  bypass was writing the artefact straight into the
+  store. `verify_declarations` re-performs them all: the
+  id recomputes from the stated fields, the change set
+  matches the version payload, the role and times are
+  legal under the declaration's own pack, there is one
+  declaration per version — and a direct declaration must
+  carry a pack version from before the closure, so one
+  forged into the store under the current pack's stamp is
+  named as struck by no route the record allows. The
+  verifier reads on the API, the CLI and the Runtime
+  beside the declarations themselves, and
+  `make topology-check` grades the closure claims from a
+  planted record.
+
 ## Quick start
 
 ```bash
@@ -984,7 +1030,30 @@ What is built and what is not, plainly:
   dual control on every declaration closes the direct act
   at its own door — the access pack already gates it as
   its own act (`declare_topology`), separable from
-  `propose_topology` / `decide_topology`.
+  `propose_topology` / `decide_topology`. **That was the
+  state through Round 16; the next bullet is Round 17
+  closing the limit in this build.**
+- **Dual control is the only route to a declaration
+  (Round 17).** Topology pack 2026.10.2 states the route
+  as data, and under it the direct act refuses every
+  attempt, naming the governed route — the limit above no
+  longer holds for declarations this build strikes. Two
+  boundaries are stated plainly. First, the closure is the
+  current pack's posture: the 2026.10.1 pack is kept
+  verbatim, a service constructed under it behaves exactly
+  as it did, and standing direct declarations from that
+  posture stay valid and verifiable — no wired surface
+  offers the old pack, but the pack mechanism itself is
+  the record's versioning discipline, not a back door this
+  round pretends away. Second, the declaration verifier
+  judges artefacts, not writers: a declaration forged into
+  the store under a pre-closure pack stamp, self-consistent
+  in every field, is indistinguishable from an honest
+  historical one — the verifier names what is provably
+  wrong (a post-closure stamp on a direct declaration, a
+  tampered field, a second declaration for a version), and
+  the store's own access control is what stands between a
+  writer and the table, as it is for every artefact here.
 
 ## Layout
 
@@ -998,7 +1067,8 @@ src/grid_triage/   models, topology, correlation, services (ingest),
                    access (R11), oversight (R12),
                    model_gateway (R13), quarantine (R14),
                    review (R15), topology dual control in
-                   revisions (R16),
+                   revisions (R16), the direct-route closure
+                   and the declaration verifier (R17),
                    runtime_app / runtime_main
                    (AgentCore Runtime),
                    api, demo, cli, local_invoke, wiring, config

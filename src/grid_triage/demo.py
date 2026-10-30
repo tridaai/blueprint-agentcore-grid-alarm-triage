@@ -212,12 +212,20 @@ def run_demo(settings: Settings | None = None) -> Services:
         f"topology v1: {sensor_update.correlation['status']} — "
         f"{sensor_update.correlation['reason']}"
     )
-    declaration = svc.topology_acts.declare(
+    # Round 17: the declaration goes through dual control —
+    # op.dana proposes and a second operator confirms. (This
+    # beat struck it with the direct act until the act closed.)
+    proposal6 = svc.topology_acts.propose(
         "v2", "op.dana", "operator",
         T0 + timedelta(minutes=45), T0 + timedelta(minutes=46),
     )
+    _, declaration = svc.topology_acts.decide(
+        proposal6.proposal_id, "dm.reyes", "duty_manager",
+        T0 + timedelta(minutes=45), "confirmed",
+    )
     print(
         f"Topology v2 declared effective by {declaration.declared_by} "
+        f"(confirming {declaration.proposed_by}'s proposal) "
         f"from {declaration.effective_at} — {len(declaration.change_set)} "
         "changes on the record:"
     )
@@ -890,6 +898,72 @@ def run_demo(settings: Settings | None = None) -> Services:
         f"proposal; the flood re-correlated as "
         f"{revision16.revised_incident_id}; verifier problems: "
         f"{svc16.topology_acts.verify_proposal(proposal.proposal_id)}."
+    )
+
+    # Round 17: dual control is the only route — on a fresh
+    # deployment the direct declaration refuses with no
+    # proposal standing at all, naming the governed route; a
+    # rejection frees the version for a fresh proposal, not
+    # for the direct act; and the declarations the governed
+    # route strikes verify as a whole.
+    tmp17 = Path(tempfile.mkdtemp(prefix="grid-demo-r17-"))
+    svc17 = Services(
+        Settings(
+            sqlite_path=str(tmp17 / "grid.db"),
+            object_store_dir=str(tmp17 / "objects"),
+        )
+    )
+    svc17.intake.ingest_feed(svc17.feed.fetch_alarms())
+    created17 = svc17.correlator.correlate_new(svc17.topology)
+    flood17 = next(
+        i for i in created17 if i.anchor_alarm_id == FLOOD_ALARM_IDS[0]
+    )
+    try:
+        svc17.topology_acts.declare(
+            "v2", "op.dana", "operator", proposed_at, effective_at
+        )
+        print("ERROR: a direct declaration landed with no proposal standing")
+    except TopologyRefusal as exc:
+        print(
+            "Only route: a direct declaration with nothing "
+            f"proposed was refused ({exc.problems[-1]})."
+        )
+    proposal17 = svc17.topology_acts.propose(
+        "v2", "op.dana", "operator", proposed_at, effective_at
+    )
+    svc17.topology_acts.decide(
+        proposal17.proposal_id, "dm.reyes", "duty_manager",
+        proposed_at + timedelta(minutes=20), "rejected",
+        reason="the v2 split is not surveyed yet",
+    )
+    try:
+        svc17.topology_acts.declare(
+            "v2", "op.dana", "operator", proposed_at, effective_at
+        )
+        print("ERROR: a direct declaration landed after a rejection")
+    except TopologyRefusal:
+        print(
+            "Only route: the rejection freed the version for a "
+            "fresh proposal — not for the direct act, which "
+            "refused again."
+        )
+    proposal17b = svc17.topology_acts.propose(
+        "v2", "dm.reyes", "duty_manager", proposed_at, effective_at
+    )
+    _, declaration17 = svc17.topology_acts.decide(
+        proposal17b.proposal_id, "op.dana", "operator",
+        proposed_at + timedelta(minutes=25), "confirmed",
+    )
+    revision17 = svc17.revisions.recorrelate(
+        flood17.incident_id, "op.dana", "operator",
+        effective_at + timedelta(minutes=30),
+    )
+    print(
+        f"Only route: the declaration stands under pack "
+        f"{declaration17.pack_version}; declaration verifier "
+        f"problems: {svc17.topology_acts.verify_declarations()}; "
+        f"the flood re-correlated as "
+        f"{revision17.revised_incident_id}."
     )
     return svc
 

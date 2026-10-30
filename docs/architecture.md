@@ -484,6 +484,32 @@ enters the catalogue: governing a declaration is an
 operator act on the API, CLI and Runtime surfaces, and the
 agent's topology reads are unchanged.
 
+**Dual control is the only route (Round 17)** closes the
+limit the Round 16 paragraph states. The topology pack's
+2026.10.2 version carries the posture as data
+(`declaration_route: dual_control_only`); the 2026.10.1 pack
+is kept verbatim beside it, and a declaration is judged by
+the pack it was struck under — the correlation pack's
+standing rule. Under the current pack the direct act refuses
+every attempt, naming the governed route, and neither loads
+the payload nor strikes anything; the access-pack guard
+still judges the act first, so an ungranted principal is
+denied and logged at that door while a granted one meets the
+closure behind it. The change governs new declarations: a
+standing direct declaration from the earlier posture is
+read, verified and re-correlated under the current pack
+unchanged. Declarations also gain their own verifier
+(`verify_declarations`, beside `verify_proposal`): every
+standing declaration is re-performed — id recomputation,
+change-set agreement with the payload, role and time
+legality under its own pack, one declaration per version —
+and a direct declaration must carry a pre-closure pack
+version, so one forged into the store under the current
+pack's stamp is named as struck by no route the record
+allows. The verifier reads on all three surfaces
+(`GET /topology/verify`, `verify-topology`,
+`verify_topology`); no tool shape enters the catalogue.
+
 ## Stores
 
 One store port, two dialects (`grid_triage/store.py`): SQLite
