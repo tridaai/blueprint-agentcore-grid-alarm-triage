@@ -1075,7 +1075,7 @@ src/grid_triage/   models, topology, correlation, services (ingest),
 data/topology/     versioned territory data (v1.json, v2.json)
 data/roster/       versioned crew roster artefact (v1.json)
 migrations/        numbered SQL migrations, sqlite + postgres trees
-tests/             pytest suite (302 tests through R16)
+tests/             pytest suite (317 tests through R17)
 evals/             the eval gate (run_evals.py)
 scripts/           check_console.py — the console correctness check
                    check_reports.py — the oversight report check
