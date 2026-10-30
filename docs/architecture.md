@@ -430,6 +430,29 @@ record, auditing the gateway's prompts through a recording
 port. The book screens text at the doors; it holds no tool
 shapes and operates nothing.
 
+**The post-incident review (Round 15)** is the per-incident
+counterpart of the oversight report. Where the report is
+aggregate by construction and names no incident, the review
+(migration 0014, review pack `2026.10.1`) re-performs ONE
+incident's whole timeline — foundation and membership, cause
+and severity, the ETR record against its graded outcome,
+work orders and their acts, the field record (quarantine
+holds named by id and rule, their text never carried),
+restoration and closure, revision/split lineage — into an
+insert-only artefact that grades its own completeness:
+every element the pack expects stands present with its
+artefact ids or absent with a stated reason, and the verdict
+fails only on the absences the pack makes required for the
+incident's state. The verifier re-performs every section by
+an independent walk (`scripts/check_reviews.py` grades the
+claims from a planted record); re-striking over a moved
+record supersedes by link and the superseded artefact names
+its drift, exactly the oversight stance. Reads sit on the
+access pack's `incident_review` surface with incident
+existence hiding, keyed on the incident the review names.
+The review holds one new read shape in the catalogue
+(`get_incident_review`) and operates nothing.
+
 ## Stores
 
 One store port, two dialects (`grid_triage/store.py`): SQLite

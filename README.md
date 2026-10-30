@@ -695,6 +695,58 @@ recorded as RT-18 in `docs/red-team.md`.
   through a recording port behind the real gateway — that no
   held text reached a model prompt, before or after release.
 
+## What Round 15 builds
+
+Every surface before this round reads the record live (the
+board, the console), freezes it in aggregate (the oversight
+report, which names no incident by construction), or covers
+one window (the post-storm review). None of them answers
+the morning-after question — **show me this one incident,
+whole** — as an artefact that can be re-performed later.
+Round 15 is the post-incident review.
+
+- **One incident's timeline, re-performed (review pack
+  `2026.10.1`, migration 0014).** A named operator or duty
+  manager strikes the review; it rebuilds the incident from
+  its artefacts of record alone — foundation and membership
+  with the rule that placed each alarm, the storm stamp and
+  the declaration behind it, cause classification and the
+  severity history, the ETR estimates and the closure
+  outcome graded against the estimate of record, work-order
+  versions with their decisions, assignments and
+  completions, the field record, restoration signals and
+  confirmations, the closure and the gated close act,
+  post-close contradictions, and the revision/split lineage.
+  It computes; it narrates nothing and amends nothing.
+- **Completeness graded on its face.** The pack names the
+  elements a review accounts for — classification, severity,
+  ETR estimate, work order, field updates, restoration
+  confirmation, closure record. Each stands `present` with
+  its artefact ids or `absent` with a stated reason
+  (`not_assessed`, `no_work_order_drafted`,
+  `closed_without_computed_estimate`, …), and the verdict is
+  `complete` only when every element the pack requires for
+  the incident's state is present. A thin record reads as a
+  thin record — an unestimated closure is named as the gap
+  it is, never dressed as a compared outcome.
+- **Held text stays held.** The field record names the
+  incident's quarantine holds — hold id, channel, the rules
+  tripped, held or released and by whom — and carries no
+  text at all. Release vouches for a human reader; the
+  review is not a republication channel.
+- **Insert-only, verified by a second path.** Reviews are
+  content-addressed and supersede by link: re-striking over
+  an unmoved record returns the standing artefact, over a
+  moved record the next one — and the superseded review then
+  names its drift, as a struck oversight report does. The
+  verifier re-performs every section by an independent walk;
+  `make reviews-check` grades the claims from a planted
+  record, forged figures included. Striking is judged under
+  the access pack (`strike_incident_review`), and reads sit
+  on the `incident_review` surface with the incident's own
+  existence hiding: a field crew is answered exactly as it
+  is answered for a non-existent incident.
+
 ## Quick start
 
 ```bash
@@ -852,6 +904,24 @@ What is built and what is not, plainly:
   an operator note on a work order, a closure's resolution
   summary — is attributed by its act and is not screened;
   the book governs the two outside channels only.
+- **The post-incident review states one incident, as the
+  record stands (Round 15).** Like the oversight report, a
+  review's verifier re-performs its sections against the
+  current store: a review over a record that has since moved
+  names its drift, and the answer is a fresh strike, which
+  supersedes by link. Completeness is the review pack's
+  stated judgement of what an incident's record should hold
+  — the required sets are deliberately narrow (classification
+  and severity for a live incident; the closure record added
+  once closed), because the review names every absence
+  either way and the verdict exists to separate "not yet
+  worked" from "worked and closed", not to invent duties the
+  engines themselves do not impose. An estimate is not
+  required for a `complete` verdict: an unestimated closure
+  is a named gap on the artefact's face
+  (`closed_without_computed_estimate`), which is the honest
+  place for it — the accuracy ledger has always recorded
+  that gap rather than dropping it.
 
 ## Layout
 
@@ -864,18 +934,20 @@ src/grid_triage/   models, topology, correlation, services (ingest),
                    board / handover / static console (R9),
                    access (R11), oversight (R12),
                    model_gateway (R13), quarantine (R14),
+                   review (R15),
                    runtime_app / runtime_main
                    (AgentCore Runtime),
                    api, demo, cli, local_invoke, wiring, config
 data/topology/     versioned territory data (v1.json, v2.json)
 data/roster/       versioned crew roster artefact (v1.json)
 migrations/        numbered SQL migrations, sqlite + postgres trees
-tests/             pytest suite (273 tests through R14)
+tests/             pytest suite (287 tests through R15)
 evals/             the eval gate (run_evals.py)
 scripts/           check_console.py — the console correctness check
                    check_reports.py — the oversight report check
                    check_model_ledger.py — the model ledger check
                    check_quarantine.py — the quarantine context audit
+                   check_reviews.py — the incident review check
 docs/              architecture.md — the honest AgentCore mapping
 ```
 

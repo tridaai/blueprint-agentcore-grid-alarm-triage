@@ -770,6 +770,50 @@ def run_demo(settings: Settings | None = None) -> Services:
         f"class now names the update: "
         f"{trap.update_id in conf_released.classes['crew_confirmation']['update_ids']}."
     )
+
+    # Round 15: the post-incident review — the flood's whole
+    # record re-performed into one artefact, its completeness
+    # graded on its face. The held note from the Round 14 beat
+    # is named by hold id and rule, its text nowhere in the
+    # review; the storm incident's review names the declaration
+    # that stamped it.
+    review = svc.reviews.strike(
+        flood.incident_id,
+        "op.dana",
+        "operator",
+        datetime(2026, 10, 17, 9, 10, tzinfo=timezone.utc),
+    )
+    completeness = review.sections["completeness"]
+    absences = ", ".join(
+        f"{a['subject']} ({a['reason']})"
+        for a in completeness["named_absences"]
+    )
+    hold_rows = review.sections["field_record"]["quarantine_holds"]
+    print(
+        f"Incident review {review.review_id} over "
+        f"{flood.incident_id}: state "
+        f"{review.sections['foundation']['state']}, completeness "
+        f"{completeness['status']}; quarantine holds named: "
+        f"{[(h['hold_id'], h['state']) for h in hold_rows]}; named "
+        f"absences: {absences}; verifier problems: "
+        f"{svc.reviews.verify_review(review.review_id)}."
+    )
+    storm_review = svc.reviews.strike(
+        storm_incident.incident_id,
+        "op.dana",
+        "operator",
+        datetime(2026, 10, 17, 9, 12, tzinfo=timezone.utc),
+    )
+    storm_foundation = storm_review.sections["foundation"]
+    print(
+        f"Incident review over the storm incident "
+        f"{storm_incident.incident_id}: mode "
+        f"{storm_foundation['operating_mode']}, declaration "
+        f"named on its face: "
+        f"{storm_foundation['storm_declaration'] is not None}; "
+        f"verifier problems: "
+        f"{svc.reviews.verify_review(storm_review.review_id)}."
+    )
     return svc
 
 
