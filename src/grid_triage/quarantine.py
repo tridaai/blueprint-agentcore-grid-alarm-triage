@@ -197,17 +197,23 @@ _TEXT_RULES: list[tuple[str, re.Pattern]] = [
     ),
 ]
 
-_B64_RUN = re.compile(r"[A-Za-z0-9+/]{40,}={0,2}")
+_B64_RUN = re.compile(r"[A-Za-z0-9+/\-_]{40,}={0,2}")
 
 
 def _decoded_views(text: str) -> list[str]:
     """The decoded views of a text: every base64-shaped run of
     stated length that decodes to printable text. A run that
     does not decode, or decodes to bytes that are not text, is
-    not a view (and not, by itself, a hold)."""
+    not a view (and not, by itself, a hold). Both base64
+    alphabets are read: the URL-safe alphabet (- and _) is
+    base64 with two glyphs swapped, so a run written in it is
+    normalised to the standard alphabet before decoding —
+    before Round 19 a separator glyph early in a URL-safe run
+    split it below the stated length and the payload was no
+    view at all (RT-20 in docs/red-team.md)."""
     views: list[str] = []
     for match in _B64_RUN.finditer(text or ""):
-        run = match.group(0)
+        run = match.group(0).replace("-", "+").replace("_", "/")
         padded = run + "=" * (-len(run) % 4)
         try:
             raw = base64.b64decode(padded, validate=True)

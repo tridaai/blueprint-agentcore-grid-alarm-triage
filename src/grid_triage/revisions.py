@@ -469,6 +469,24 @@ class FieldUpdateService:
             "holds": holds,
         }
         update = FieldUpdate(update_id=_hash_id("UPD", body), **body)
+        # An identical re-post is the same act arriving twice
+        # — a retried submission, not a second update. Its id
+        # recomputes from the body, so the standing artefact is
+        # returned and nothing is recorded twice; before Round
+        # 19 the retry died on the store's uniqueness
+        # constraint as a raw database error (RT-24 in
+        # docs/red-team.md). A re-post whose body differs in
+        # any field is a different act and proceeds as one.
+        standing = next(
+            (
+                u
+                for u in self.store.list_field_updates(incident_id)
+                if u.update_id == update.update_id
+            ),
+            None,
+        )
+        if standing is not None:
+            return standing
         self.store.add_field_update(update)
         for hold_id, channel, field_name, value, rules in pending_holds:
             self.quarantine.place_hold(
@@ -816,11 +834,13 @@ class TopologyService:
     def verify_proposal(self, proposal_id: str) -> list[str]:
         """Re-perform one proposal's whole standing from the
         artefacts of record: the proposal's id recomputes from
-        its stated fields, its change set matches the version
-        payload, its decision fold is legal (at most one
-        decision, in the pack's vocabulary, by a second
-        operator under the folding, in a pack role, not
-        backdated, a rejection reasoned), and the declaration
+        its stated fields, the pack it names is one this build
+        can read and its proposer role is legal under that
+        pack, its change set matches the version payload, its
+        decision fold is legal (at most one decision, in the
+        pack's vocabulary, by a second operator under the
+        folding, in a pack role, not backdated, a rejection
+        reasoned), and the declaration
         record agrees — a confirmed proposal has exactly the
         declaration it stated struck under its name, and no
         other standing has one. Returns the problems named;
@@ -844,6 +864,27 @@ class TopologyService:
                 "its stated fields — the stored artefact is not the "
                 "artefact its id names"
             )
+        # The proposal is judged under the pack it was struck
+        # under — the rule verify_declarations states for
+        # declarations. Before Round 19 this verifier never
+        # looked at the proposal's pack version at all, so a
+        # self-consistent proposal struck under a pack this
+        # build cannot read verified clean (RT-22 in
+        # docs/red-team.md).
+        proposal_pack = topology_pack_by_version(proposal.pack_version)
+        if proposal_pack is None:
+            problems.append(
+                f"proposal {proposal_id}: struck under topology "
+                f"pack {proposal.pack_version!r}, which this "
+                "build cannot read"
+            )
+        elif proposal.role not in proposal_pack["actor_roles"]:
+            problems.append(
+                f"proposal {proposal_id}: role {proposal.role!r} "
+                "may not propose a topology version under the "
+                "pack it names"
+            )
+        decision_pack = proposal_pack or self.pack
         try:
             payload = load_topology_file(proposal.version)
             if payload.get("change_set", []) != proposal.change_set:
@@ -877,7 +918,7 @@ class TopologyService:
                     f"decision {record.decision_id}: its id does not "
                     "recompute from its stated fields"
                 )
-            if record.decision not in self.pack["decisions"]:
+            if record.decision not in decision_pack["decisions"]:
                 problems.append(
                     f"decision {record.decision_id}: {record.decision!r} "
                     "is not a decision the topology pack states"
@@ -888,7 +929,7 @@ class TopologyService:
                     f"{record.decided_by}, the proposal's own proposer "
                     "under the name folding — dual control does not hold"
                 )
-            if record.role not in self.pack["actor_roles"]:
+            if record.role not in decision_pack["actor_roles"]:
                 problems.append(
                     f"decision {record.decision_id}: role "
                     f"{record.role!r} may not decide a topology proposal"

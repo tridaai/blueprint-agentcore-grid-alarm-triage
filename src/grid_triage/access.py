@@ -282,9 +282,21 @@ SYSTEM_ACTOR = "system"
 
 
 def fold_name(name: str) -> str:
-    """The identity folding actor binding compares under: case
-    and whitespace variants of a name are the same person."""
-    return " ".join((name or "").split()).casefold()
+    """The identity folding actor binding compares under: case,
+    whitespace and separator variants of a name are the same
+    person. The record's names are dotted by convention —
+    op.dana, dm.reyes — and the same person written with a
+    space, a hyphen or no separator at all (op dana, op-dana,
+    opdana) is the same person to every dual-control and
+    self-act check that folds. The fold therefore keeps the
+    letters and digits of the name, case-folded, and drops
+    everything between them. (Round 19: the earlier fold kept
+    the separators, so a punctuation variant of a proposer's
+    own name decided their proposal and released their own
+    held text — see RT-19 in docs/red-team.md.)"""
+    return "".join(
+        ch for ch in (name or "").casefold() if ch.isalnum()
+    )
 
 
 class AccessDeniedError(RuntimeError):

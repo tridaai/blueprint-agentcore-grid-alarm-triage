@@ -367,6 +367,33 @@ def verify_policy_pack(
                 f"cedar statement id {statement['id']} appears twice"
             )
         seen_ids.add(statement["id"])
+        # The guard itself is graded, not only the action list:
+        # a statement that forbids, that binds no gateway
+        # resource, or whose area condition has been edited
+        # away carries the right actions and the wrong meaning,
+        # and before Round 19 all three verified clean (RT-21
+        # in docs/red-team.md).
+        text = statement["text"]
+        if "forbid" in text or not re.search(r"(?m)^permit\s*\(", text):
+            problems.append(
+                f"cedar statement {statement['id']} is not a "
+                "permit — the pack permits its shapes and lets "
+                "Cedar's default deny the rest"
+            )
+        if 'resource == GridGateway::Gateway::"grid-triage"' not in text:
+            problems.append(
+                f"cedar statement {statement['id']} does not "
+                "bind the pack's gateway resource"
+            )
+        if (
+            "context.caller_area.containsAll(context.target_feeders)"
+            not in text
+        ):
+            problems.append(
+                f"cedar statement {statement['id']} does not "
+                "carry the area condition — a call under it is "
+                "not judged against the caller's area"
+            )
         stated = set(_CEDAR_ACTION.findall(statement["text"]))
         expected = {
             name

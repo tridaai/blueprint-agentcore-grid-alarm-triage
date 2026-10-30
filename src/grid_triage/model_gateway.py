@@ -291,6 +291,18 @@ def verify_ledger(store, pack: dict = MODEL_PACK) -> list[str]:
                     f"from the stored sizes ({in_tok}/{out_tok} vs "
                     f"{record.input_tokens}/{record.output_tokens})"
                 )
+            if record.profile not in pack["rates_micro_per_token"]:
+                # A record the pack cannot price is named, not
+                # crashed on: before Round 19 the recompute
+                # below raised KeyError on such a record and
+                # the verifier died instead of grading (RT-23
+                # in docs/red-team.md).
+                problems.append(
+                    f"{record.call_id}: profile {record.profile!r} "
+                    "is not priced by the pack — its cost cannot "
+                    "recompute"
+                )
+                continue
             expected = cost_micro(
                 record.profile, in_tok, out_tok, pack
             )
