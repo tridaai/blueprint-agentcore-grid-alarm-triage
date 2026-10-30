@@ -937,6 +937,32 @@ so changing them is deliberate. `make red-team-check`
 grades the round's claims from planted records, and the
 eval gate carries one zero-tolerance counter per defect.
 
+## What Round 20 builds
+
+Round 20 builds nothing new — it releases Rounds 1–19 as
+version 1.0.0. The version is set in the package metadata,
+the package `__version__` and the lockfile; `CHANGELOG.md`
+carries one entry per round, written from these sections and
+the commit log; `docs/release-1.0.0.md` carries the notes a
+deployer needs, the freeze figures, and what a deployment
+still has to do. The honest status below is restated as the
+release's, and the docs were swept against the code as
+shipped: the introduction's operator gate and Law 1's Policy
+pack now stand in the present tense, a truncated
+honest-status fragment is removed, the layout lists the
+Round 18/19 modules and the policy and red-team checks, and
+the architecture table no longer promises a later round —
+the Gateway wiring is stated as the deployment's, the
+AgentCore evaluator configs as not shipped, and the console
+trace timeline it once pointed at as never built. The freeze
+re-ran every gate on the release tree: 358 tests, the eval
+gate PASS at 110 zero-tolerance counters, the console,
+reports, ledger, quarantine, reviews, topology, policy and
+red-team checks each PASS, and the demo at exit 0. The
+work-in-progress notice at the top stays on — hands-on
+developer testing and the companion blog post are still
+outstanding.
+
 ## Quick start
 
 ```bash
@@ -1193,7 +1219,7 @@ src/grid_triage/   models, topology, correlation, services (ingest),
 data/topology/     versioned territory data (v1.json, v2.json)
 data/roster/       versioned crew roster artefact (v1.json)
 migrations/        numbered SQL migrations, sqlite + postgres trees
-tests/             pytest suite (358 tests through R19)
+tests/             pytest suite (358 tests at the 1.0.0 freeze)
 evals/             the eval gate (run_evals.py)
 scripts/           check_console.py — the console correctness check
                    check_reports.py — the oversight report check
