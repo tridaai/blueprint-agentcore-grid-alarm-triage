@@ -55,6 +55,11 @@ payload names one piece of triage work:
   escaped view form, and the named reviewer's release act.
   Reading and releasing govern text on the record — neither
   operates anything.
+- ``{"action": "get_policy_pack" | "verify_policy"}`` — the
+  Round 18 AgentCore Policy pack: the tool table and Cedar
+  permits the deployment attaches to the Gateway, and the
+  pack's drift verification against the live catalogue. Both
+  are reads of code data; neither operates anything.
 - ``{"action": "record_restoration_signal" |
   "confirm_restoration" | "get_restoration_confirmation" |
   "close_incident_gated" | "complete_work_order" |
@@ -132,6 +137,7 @@ from grid_triage.access import (
     SURFACE_MEMORY,
     SURFACE_OVERSIGHT,
     SURFACE_PACKS,
+    SURFACE_POLICY,
     SURFACE_RESTORATION,
     SURFACE_SEVERITY,
     SURFACE_STORM,
@@ -807,6 +813,23 @@ def handle_invocation(payload: dict, session_id: str | None = None) -> dict:
         return {
             "status": "ok",
             "problems": svc.topology_acts.verify_declarations(),
+        }
+    if action == "get_policy_pack":
+        blocked = surface_block(SURFACE_POLICY)
+        if blocked is not None:
+            return blocked
+        return {
+            "status": "ok",
+            "pack": svc.policy.pack(),
+            "fingerprint": svc.policy.fingerprint(),
+        }
+    if action == "verify_policy":
+        blocked = surface_block(SURFACE_POLICY)
+        if blocked is not None:
+            return blocked
+        return {
+            "status": "ok",
+            "problems": svc.policy.verify(),
         }
     if action == "propose_topology":
         proposed_at = now

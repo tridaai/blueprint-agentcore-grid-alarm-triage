@@ -24,6 +24,7 @@ from grid_triage.object_store import LocalObjectStore
 from grid_triage.oversight import OversightService
 from grid_triage.quarantine import QuarantineService
 from grid_triage.packs import EvidencePackService
+from grid_triage.policy import PolicyService
 from grid_triage.restoration import EventLogService, RestorationService
 from grid_triage.review import IncidentReviewService
 from grid_triage.revisions import FieldUpdateService, RevisionService, TopologyService
@@ -91,6 +92,9 @@ class Services:
         self.updates = FieldUpdateService(self.store, self.chain)
         self.updates.quarantine = self.quarantine
         self.topology_acts = TopologyService(self.store)
+        # Round 18: the AgentCore Policy pack — stateless, the
+        # pack is code data; the service re-performs it.
+        self.policy = PolicyService()
         self.revisions = RevisionService(
             self.store,
             self.chain,

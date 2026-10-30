@@ -122,6 +122,10 @@ def main(argv: list[str] | None = None) -> int:
     p_dec.add_argument("proposal_id")
     # Round 17: re-perform every standing declaration.
     sub.add_parser("verify-topology")
+    # Round 18: the AgentCore Policy pack, and its drift
+    # verification against the live catalogue.
+    sub.add_parser("policy-pack")
+    sub.add_parser("verify-policy")
     p_dec.add_argument("--by", required=True, help="the deciding operator's name (not the proposer)")
     p_dec.add_argument("--role", required=True, help="the deciding operator's role")
     p_dec.add_argument("--decision", required=True, help="confirmed | rejected")
@@ -641,6 +645,16 @@ def main(argv: list[str] | None = None) -> int:
         }, indent=2))
     elif args.command == "verify-topology":
         problems = svc.topology_acts.verify_declarations()
+        print(json.dumps({"problems": problems}, indent=2))
+        if problems:
+            return 1
+    elif args.command == "policy-pack":
+        print(json.dumps({
+            "pack": svc.policy.pack(),
+            "fingerprint": svc.policy.fingerprint(),
+        }, indent=2))
+    elif args.command == "verify-policy":
+        problems = svc.policy.verify()
         print(json.dumps({"problems": problems}, indent=2))
         if problems:
             return 1

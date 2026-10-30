@@ -130,6 +130,7 @@ SURFACE_OVERSIGHT = "oversight"
 SURFACE_MODEL_LEDGER = "model_ledger"
 SURFACE_QUARANTINE = "quarantine"
 SURFACE_INCIDENT_REVIEW = "incident_review"
+SURFACE_POLICY = "policy"
 SURFACES = [
     SURFACE_INCIDENT,
     SURFACE_ALARMS,
@@ -149,6 +150,7 @@ SURFACES = [
     SURFACE_MODEL_LEDGER,
     SURFACE_QUARANTINE,
     SURFACE_INCIDENT_REVIEW,
+    SURFACE_POLICY,
 ]
 
 # Acts — the named operations the pack gates. These are the
@@ -368,6 +370,7 @@ _OPERATIONAL_READS = [
     SURFACE_MODEL_LEDGER,
     SURFACE_QUARANTINE,
     SURFACE_INCIDENT_REVIEW,
+    SURFACE_POLICY,
 ]
 
 # The control-room acts an operator performs. The duty manager

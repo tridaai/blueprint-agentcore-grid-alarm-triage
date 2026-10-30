@@ -47,6 +47,7 @@ from grid_triage.access import (
     SURFACE_MODEL_LEDGER,
     SURFACE_OVERSIGHT,
     SURFACE_PACKS,
+    SURFACE_POLICY,
     SURFACE_QUARANTINE,
     SURFACE_RESTORATION,
     SURFACE_SEVERITY,
@@ -1033,6 +1034,29 @@ def verify_topology_declarations(request: Request) -> dict:
     if not _list_visible(request, SURFACE_TOPOLOGY):
         return {"problems": []}
     return {"problems": svc().topology_acts.verify_declarations()}
+
+
+@app.get("/policy/pack")
+def get_policy_pack(request: Request) -> dict:
+    # Round 18: the AgentCore Policy pack the deployment
+    # attaches to the Gateway — the tool table, the Cedar
+    # permits, the stated denial shape. A caller the surface
+    # hides from reads it as absent.
+    if not _list_visible(request, SURFACE_POLICY):
+        return {"pack": None, "fingerprint": None}
+    return {
+        "pack": svc().policy.pack(),
+        "fingerprint": svc().policy.fingerprint(),
+    }
+
+
+@app.get("/policy/verify")
+def verify_policy_pack(request: Request) -> dict:
+    # Round 18: re-perform the pack against the live tool
+    # catalogue; drift is named, never averaged over.
+    if not _list_visible(request, SURFACE_POLICY):
+        return {"problems": []}
+    return {"problems": svc().policy.verify()}
 
 
 class ProposeTopologyRequest(BaseModel):
