@@ -841,6 +841,53 @@ Round 17 closes it, in the build's own posture:
   `make topology-check` grades the closure claims from a
   planted record.
 
+## What Round 18 builds
+
+Round 11 shipped the access pack, and the architecture doc
+kept saying the other platform layer was "a later round":
+the AgentCore Policy pack on the Gateway, designed since
+Round 1 — allow read/draft/notify, deny every control-shaped
+call, deny out-of-area reads — and never shipped. Round 18
+ships it, as a pack in this repo's one pattern:
+
+- **The pack is data** (`grid_triage/policy.py`, pack
+  2026.10.1). The tool table states every catalogue tool's
+  shape and whether it is area-scoped — it touches one
+  feeder's operational record — written out in full, never
+  derived from the registry, so a catalogue that grows past
+  the pack is drift the verifier can name. The Cedar face is
+  one permit per shape, each naming its tools explicitly and
+  carrying the area condition: the call's target feeders
+  must sit inside the caller's area. Cedar's default is
+  deny, so a control-shaped call needs no forbid statement —
+  no permit for it can be written from this table.
+- **The decision engine re-performs the pack in code.**
+  `decide` judges one Gateway call and names its reason from
+  a closed vocabulary: permitted, out_of_area, area_unstated
+  (an area-scoped call whose targets the Gateway target
+  could not resolve fails closed — the area condition over
+  no targets proves nothing), control_shaped (a name outside
+  the catalogue carrying the registry scan's control
+  vocabulary), unknown_tool.
+- **Drift is graded, in both directions.**
+  `verify_policy_pack` re-performs the pack against the live
+  catalogue: a tool the pack does not cover, a rule naming a
+  tool the catalogue does not hold, a shape stated
+  differently, a Cedar statement whose actions have drifted
+  from the table, a denial code that is not the platform's —
+  each is a named problem. The pack and its verification
+  read on the API, the CLI and the Runtime under the access
+  pack's new `policy` surface (operator, duty manager,
+  auditor; hidden as absent from dispatcher and field crew),
+  and `make policy-check` grades the claims from a planted
+  record.
+- **Denials are detected in code.** A Gateway policy denial
+  is not an HTTP error — it arrives as HTTP 200 with a
+  JSON-RPC error body, code −32002. `detect_denial` reads
+  that shape and `raise_for_denial` raises it as a named
+  exception, so no caller can mistake a denied call's empty
+  result for data.
+
 ## Quick start
 
 ```bash
@@ -956,10 +1003,20 @@ What is built and what is not, plainly:
   pack value, not a universal truth: 2026.10.2's four hours is
   this utility's stated decision, and 2026.10.1's uncapped
   correlations stand as computed.
-- **The AgentCore Policy pack is a later round.** In R1, Law 1 (no
-  control) is enforced by the tool catalogue's construction and
-  the registry scan; the Cedar policy pack at the Gateway is the
-  platform layer, added with the Gateway port.
+- **The AgentCore Policy pack ships in Round 18, graded
+  in-repo; no live Gateway is called.** Law 1 is now stated
+  twice in code: by the tool catalogue's construction and
+  registry scan, and by the policy pack (2026.10.1) — the
+  tool table, the Cedar permits, the decision engine that
+  re-performs them, and the −32002 denial detection. What
+  remains the deployment's: attaching the pack to a real
+  Gateway (the action namespace in the Cedar is the one the
+  deployment's Gateway target publishes), the Gateway
+  targets themselves behind the catalogue's contracts, and
+  the target's duty of resolving each call's target feeders
+  from its arguments — the area condition judges what the
+  target states, and a scoped call it cannot resolve fails
+  closed here rather than passing unstated.
 - **No real SCADA/OMS is connected.** Ingest is a port with a
   planted reference feed. The blueprint's production posture keeps
   a historian read-replica between the agent and any operational
@@ -1075,7 +1132,7 @@ src/grid_triage/   models, topology, correlation, services (ingest),
 data/topology/     versioned territory data (v1.json, v2.json)
 data/roster/       versioned crew roster artefact (v1.json)
 migrations/        numbered SQL migrations, sqlite + postgres trees
-tests/             pytest suite (317 tests through R17)
+tests/             pytest suite (340 tests through R18)
 evals/             the eval gate (run_evals.py)
 scripts/           check_console.py — the console correctness check
                    check_reports.py — the oversight report check

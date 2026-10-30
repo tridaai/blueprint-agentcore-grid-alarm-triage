@@ -965,6 +965,63 @@ def run_demo(settings: Settings | None = None) -> Services:
         f"the flood re-correlated as "
         f"{revision17.revised_incident_id}."
     )
+
+    # Round 18: the platform layer ships — the AgentCore
+    # Policy pack the deployment attaches to the Gateway. The
+    # pack verifies clean against the catalogue the agent
+    # actually holds; its decisions re-perform in code; and a
+    # Gateway denial, which arrives as HTTP 200 with a −32002
+    # body, is detected rather than read as an empty result.
+    from grid_triage.policy import GatewayCall, detect_denial
+
+    policy = svc.policy
+    area = [flood17.feeder_id]
+    in_area = policy.decide(
+        GatewayCall(
+            tool="get_incident",
+            target_feeders=area,
+            caller_area=area,
+            caller="op.dana",
+        )
+    )
+    out_area = policy.decide(
+        GatewayCall(
+            tool="get_incident",
+            target_feeders=area,
+            caller_area=["FDR-12"],
+            caller="op.dana",
+        )
+    )
+    control = policy.decide(
+        GatewayCall(
+            tool="shed_load", target_feeders=area, caller_area=area
+        )
+    )
+    unstated = policy.decide(
+        GatewayCall(tool="get_incident", caller_area=area)
+    )
+    denial = detect_denial(
+        {
+            "jsonrpc": "2.0",
+            "id": 7,
+            "error": {
+                "code": -32002,
+                "message": "denied by policy",
+                "data": {"reason": out_area.reason, "tool": "get_incident"},
+            },
+        }
+    )
+    print(
+        f"Gateway policy: pack {policy.pack()['version']} "
+        f"verifies clean (problems: {policy.verify()}); the "
+        f"flood's feeder in the caller's area: {in_area.decision}; "
+        f"outside it: {out_area.decision} ({out_area.reason}); a "
+        f"scoped call with no targets: {unstated.decision} "
+        f"({unstated.reason}); a control-shaped call: "
+        f"{control.decision} ({control.reason}); a denial "
+        f"arriving as HTTP 200 is detected in code: "
+        f"{denial.reason} on {denial.tool}."
+    )
     return svc
 
 

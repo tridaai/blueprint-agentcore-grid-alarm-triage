@@ -11,9 +11,9 @@ entry is one of three shapes:
 There is deliberately no shape for operating anything: no
 switching, no reclosing, no shedding, no setpoints. In production
 the same catalogue is exposed through AgentCore Gateway as
-read-only MCP targets, and the AgentCore Policy pack (Round 11)
-denies control-shaped calls at the gateway as a second, platform
-layer. The tests scan this registry mechanically: a control-shaped
+read-only MCP targets, and the AgentCore Policy pack (Round 18,
+`grid_triage/policy.py`) denies control-shaped calls at the
+gateway as a second, platform layer. The tests scan this registry mechanically: a control-shaped
 tool cannot be added without failing the gate.
 """
 
