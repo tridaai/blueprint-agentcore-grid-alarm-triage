@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "trida-blueprint-agentcore-grid-alarm-triage"
-version = "0.1.0"
+version = "1.0.0"
 description = "Trida AI Blueprint — Grid Alarm Triage & Field Work Agent on AWS Bedrock AgentCore (reference prototype)"
 readme = "README.md"
 license = { text = "Apache-2.0" }
