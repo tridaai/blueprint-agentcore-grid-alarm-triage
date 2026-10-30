@@ -371,6 +371,39 @@ Round 17 counters:
                                  verifier does not name, or a
                                  clean standing it names
 
+Round 18 counters:
+  policy_drift_errors            the standing policy pack does
+                                 not verify clean against the
+                                 catalogue, or a drift the
+                                 verifier must name — a covered
+                                 tool dropped, a phantom rule, a
+                                 shape stated differently, a
+                                 Cedar omission or addition, a
+                                 denial code that is not the
+                                 platform's — goes unnamed
+  policy_decision_errors         a Gateway call the pack judges
+                                 wrong: an in-area call across
+                                 the shapes that does not
+                                 permit, an out-of-area call
+                                 that does not deny, a scoped
+                                 call with no targets that does
+                                 not fail closed, a control-
+                                 shaped or unknown name that
+                                 does not deny with its reason
+  policy_denial_detection_errors a −32002 denial body that is
+                                 not detected with its reason, a
+                                 result body or another error
+                                 code detected as a policy
+                                 denial, or raise_for_denial
+                                 passing a denial through
+  policy_surface_errors          a policy read by a principal
+                                 the access pack refuses
+                                 (dispatcher, field crew) that
+                                 is not blocked at the Runtime
+                                 door with its denial on the
+                                 log, or a granted principal's
+                                 read that is refused
+
 Run: uv run python evals/run_evals.py  (exit 0 = GATE: PASS)
 """
 
@@ -3204,7 +3237,212 @@ def main() -> int:
         ):
             counters["topology_declaration_verify_errors"] += 1
 
-    print("Evals — grid alarm triage agent (Rounds 1-17)")
+    # -- Round 18: the AgentCore Policy pack ------------------
+    # On a hermetic deployment: the standing pack verifies
+    # clean against the live catalogue and every drift class
+    # is named; the decision engine re-performs the pack —
+    # in-area permits across the shapes, out-of-area and
+    # unstated-area denials, control-shaped and unknown names
+    # denied with their reasons, the flood incident's own
+    # feeder judged from the record; the −32002 denial shape
+    # is detected in code and raised, never read as data; and
+    # the policy surface hides from the roles the access pack
+    # does not grant, with the refusal on the denial log.
+    counters["policy_drift_errors"] = 0
+    counters["policy_decision_errors"] = 0
+    counters["policy_denial_detection_errors"] = 0
+    counters["policy_surface_errors"] = 0
+    import copy as _copy18
+
+    import grid_triage.runtime_app as _runtime18
+    from grid_triage.config import Settings as _Settings18
+    from grid_triage.policy import (
+        POLICY_PACK as _PolicyPack18,
+    )
+    from grid_triage.policy import (
+        GatewayCall as _GatewayCall18,
+    )
+    from grid_triage.policy import (
+        GatewayDeniedError as _GatewayDenied18,
+    )
+    from grid_triage.policy import (
+        decide as _decide18,
+    )
+    from grid_triage.policy import (
+        detect_denial as _detect18,
+    )
+    from grid_triage.policy import (
+        raise_for_denial as _raise18,
+    )
+    from grid_triage.policy import (
+        verify_policy_pack as _verify18,
+    )
+    from grid_triage.runtime_app import (
+        handle_invocation as _invoke18,
+    )
+    from grid_triage.wiring import Services as _Services18
+
+    if _verify18():
+        counters["policy_drift_errors"] += 1
+    _drift18 = _copy18.deepcopy(_PolicyPack18)
+    del _drift18["tools"]["get_incident"]
+    if not any(
+        "get_incident" in p and "does not cover" in p
+        for p in _verify18(_drift18)
+    ):
+        counters["policy_drift_errors"] += 1
+    _drift18 = _copy18.deepcopy(_PolicyPack18)
+    _drift18["tools"]["trip_breaker"] = {
+        "shape": "read",
+        "area_scoped": True,
+    }
+    if not any(
+        "trip_breaker" in p and "does not hold" in p
+        for p in _verify18(_drift18)
+    ):
+        counters["policy_drift_errors"] += 1
+    _drift18 = _copy18.deepcopy(_PolicyPack18)
+    _drift18["tools"]["get_incident"]["shape"] = "draft"
+    if not any(
+        "get_incident" in p and "states shape" in p
+        for p in _verify18(_drift18)
+    ):
+        counters["policy_drift_errors"] += 1
+    _drift18 = _copy18.deepcopy(_PolicyPack18)
+    _drift18["cedar_policies"][0]["text"] = _drift18["cedar_policies"][
+        0
+    ]["text"].replace('        GridGateway::Action::"get_alarm",\n', "")
+    if not any(
+        "get_alarm" in p and "does not name" in p
+        for p in _verify18(_drift18)
+    ):
+        counters["policy_drift_errors"] += 1
+    _drift18 = _copy18.deepcopy(_PolicyPack18)
+    _drift18["cedar_policies"][0]["text"] = _drift18["cedar_policies"][
+        0
+    ]["text"].replace(
+        'GridGateway::Action::"get_alarm"',
+        'GridGateway::Action::"shed_load"',
+    )
+    if not any("shed_load" in p for p in _verify18(_drift18)):
+        counters["policy_drift_errors"] += 1
+    _drift18 = _copy18.deepcopy(_PolicyPack18)
+    _drift18["denial_code"] = -32601
+    if not any("denial code" in p for p in _verify18(_drift18)):
+        counters["policy_drift_errors"] += 1
+
+    def _call18(tool, targets=(), area=("FDR-07", "FDR-03")):
+        return _GatewayCall18(
+            tool=tool,
+            target_feeders=list(targets),
+            caller_area=list(area),
+        )
+
+    for _tool18 in ("get_incident", "draft_work_order", "notify_operator"):
+        _d18 = _decide18(_call18(_tool18, targets=["FDR-07"]))
+        if _d18.decision != "permit" or _d18.reason != "permitted":
+            counters["policy_decision_errors"] += 1
+    _d18 = _decide18(_call18("get_incident", targets=["FDR-12"]))
+    if _d18.decision != "deny" or _d18.reason != "out_of_area":
+        counters["policy_decision_errors"] += 1
+    _d18 = _decide18(_call18("get_incident", targets=[]))
+    if _d18.decision != "deny" or _d18.reason != "area_unstated":
+        counters["policy_decision_errors"] += 1
+    _d18 = _decide18(_call18("list_alarms", targets=[], area=[]))
+    if _d18.decision != "permit":
+        counters["policy_decision_errors"] += 1
+    _d18 = _decide18(_call18("shed_load", targets=["FDR-07"]))
+    if _d18.decision != "deny" or _d18.reason != "control_shaped":
+        counters["policy_decision_errors"] += 1
+    _d18 = _decide18(_call18("read_the_valve_manual", targets=[]))
+    if _d18.decision != "deny" or _d18.reason != "unknown_tool":
+        counters["policy_decision_errors"] += 1
+
+    _body18 = {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "error": {
+            "code": -32002,
+            "message": "denied by policy",
+            "data": {"reason": "out_of_area", "tool": "get_incident"},
+        },
+    }
+    _denial18 = _detect18(_body18)
+    if (
+        _denial18 is None
+        or _denial18.reason != "out_of_area"
+        or _denial18.tool != "get_incident"
+    ):
+        counters["policy_denial_detection_errors"] += 1
+    if _detect18({"jsonrpc": "2.0", "id": 7, "result": {}}) is not None:
+        counters["policy_denial_detection_errors"] += 1
+    if (
+        _detect18({"jsonrpc": "2.0", "id": 7, "error": {"code": -32602}})
+        is not None
+    ):
+        counters["policy_denial_detection_errors"] += 1
+    try:
+        _raise18(_body18)
+        counters["policy_denial_detection_errors"] += 1
+    except _GatewayDenied18:
+        pass
+
+    with tempfile.TemporaryDirectory() as _td18:
+        _tmp18 = Path(_td18)
+        svc18 = _Services18(
+            _Settings18(
+                sqlite_path=str(_tmp18 / "grid18.db"),
+                object_store_dir=str(_tmp18 / "objects18"),
+            )
+        )
+        svc18.intake.ingest_feed(svc18.feed.fetch_alarms())
+        _created18 = svc18.correlator.correlate_new(svc18.topology)
+        _flood18 = next(
+            i for i in _created18 if i.anchor_alarm_id == FLOOD_ALARM_IDS[0]
+        )
+        _d18 = _decide18(
+            _call18(
+                "get_incident",
+                targets=[_flood18.feeder_id],
+                area=[_flood18.feeder_id],
+            )
+        )
+        if _d18.decision != "permit":
+            counters["policy_decision_errors"] += 1
+        _d18 = _decide18(
+            _call18(
+                "get_incident", targets=[_flood18.feeder_id], area=["FDR-12"]
+            )
+        )
+        if _d18.decision != "deny" or _d18.reason != "out_of_area":
+            counters["policy_decision_errors"] += 1
+
+        _runtime18._services = svc18
+        _denials18 = svc18.store.count_access_denials()
+        for _role18 in ("dispatcher", "field_crew"):
+            _blocked18 = _invoke18(
+                {
+                    "action": "verify_policy",
+                    "principal": {
+                        "id": f"eval.{_role18}",
+                        "role": _role18,
+                    },
+                }
+            )
+            if _blocked18.get("status") != "access_denied":
+                counters["policy_surface_errors"] += 1
+        if svc18.store.count_access_denials() != _denials18 + 2:
+            counters["policy_surface_errors"] += 1
+        _allowed18 = _invoke18(
+            {
+                "action": "verify_policy",
+                "principal": {"id": "au.vale", "role": "auditor"},
+            }
+        )
+        if _allowed18 != {"status": "ok", "problems": []}:
+            counters["policy_surface_errors"] += 1
+
+    print("Evals — grid alarm triage agent (Rounds 1-18)")
     for name, value in counters.items():
         print(f"  {name}: {value} (required 0)")
     failed = [n for n, v in counters.items() if v != 0]
