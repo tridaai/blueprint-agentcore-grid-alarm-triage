@@ -747,6 +747,54 @@ Round 15 is the post-incident review.
   existence hiding: a field crew is answered exactly as it
   is answered for a non-existent incident.
 
+## What Round 16 builds
+
+Every consequential act in this record had a second pair of
+eyes — the gated close earns its close through a computed
+confirmation, a quarantine hold is released by a reviewer
+who is not its reporter, a handover is accepted by the
+incoming operator — except the one that changes the most:
+the topology declaration. One authorised operator's act
+made a new territory version effective and unlocked
+re-correlation under it. Round 16 is the declaration's dual
+control.
+
+- **A proposal states the whole declaration, and changes
+  nothing (migration 0015).** A named operator proposes a
+  version: the proposal artefact carries the version, the
+  proposer, the proposed effective time and the change set
+  verbatim from the version payload. It loads no payload,
+  strikes no declaration, and no incident can be
+  re-correlated on its strength. One live proposal per
+  version.
+- **A decision is a second operator's act.** Confirm or
+  reject, as an insert-only artefact — and never by the
+  proposer: the comparison runs under the repo's name
+  folding, so a case or whitespace variant of the
+  proposer's name is the proposer. A rejection requires a
+  stated reason and strikes nothing; a decided proposal is
+  not decided twice; a decision cannot predate its
+  proposal.
+- **Confirmation strikes exactly what was proposed.** The
+  declaration comes into the record through the same strike
+  path the direct act uses, with the confirmer as its
+  declarer, the proposal's effective time and change set
+  untouched, and the proposal's provenance — proposer and
+  proposal id — on its face. A standing is the fold of its
+  decisions, never a stored field, and `verify_proposal`
+  re-performs the whole standing: a forged self-confirmation
+  inserted straight into the store, or a declaration
+  standing under a pending proposal's name, is named.
+- **The direct route cannot walk around a live proposal.**
+  While a proposal for a version stands pending, the direct
+  declaration of that version is refused, naming the
+  proposal. The direct act itself remains for versions no
+  proposal stands over — the pre-R16 route, stated plainly
+  in the honest status below. Both acts are judged under
+  the access pack (`propose_topology`, `decide_topology`)
+  on the topology surface; `make topology-check` grades
+  the claims from a planted record, forgeries included.
+
 ## Quick start
 
 ```bash
@@ -757,6 +805,7 @@ make evals            # the eval gate (zero-tolerance counters)
 make reports-check    # the oversight report check (plants forgeries)
 make ledger-check     # the model ledger check (plants a tamper)
 make quarantine-check # the quarantine check (plants trapped text)
+make topology-check   # the topology dual-control check (plants forgeries)
 make serve            # AgentCore Runtime app on :8080
 make api              # operations API on :8000
 make invoke           # local in-process invoke of the agent step
@@ -922,6 +971,20 @@ What is built and what is not, plainly:
   (`closed_without_computed_estimate`), which is the honest
   place for it — the accuracy ledger has always recorded
   that gap rather than dropping it.
+- **Topology dual control governs the propose/decide route;
+  the direct declaration act remains (Round 16).** Where a
+  proposal stands pending, the direct act is blocked for
+  that version — the governed route cannot be bypassed
+  while it is live. But a version no proposal stands over
+  can still be declared by the single Round 6 act, as it
+  could before this round: the tightening binds the route
+  the room opens, it does not rewrite the record's earlier
+  discipline, and this paragraph is where that limit is
+  stated rather than smoothed over. A deployment that wants
+  dual control on every declaration closes the direct act
+  at its own door — the access pack already gates it as
+  its own act (`declare_topology`), separable from
+  `propose_topology` / `decide_topology`.
 
 ## Layout
 
@@ -934,20 +997,22 @@ src/grid_triage/   models, topology, correlation, services (ingest),
                    board / handover / static console (R9),
                    access (R11), oversight (R12),
                    model_gateway (R13), quarantine (R14),
-                   review (R15),
+                   review (R15), topology dual control in
+                   revisions (R16),
                    runtime_app / runtime_main
                    (AgentCore Runtime),
                    api, demo, cli, local_invoke, wiring, config
 data/topology/     versioned territory data (v1.json, v2.json)
 data/roster/       versioned crew roster artefact (v1.json)
 migrations/        numbered SQL migrations, sqlite + postgres trees
-tests/             pytest suite (287 tests through R15)
+tests/             pytest suite (302 tests through R16)
 evals/             the eval gate (run_evals.py)
 scripts/           check_console.py — the console correctness check
                    check_reports.py — the oversight report check
                    check_model_ledger.py — the model ledger check
                    check_quarantine.py — the quarantine context audit
                    check_reviews.py — the incident review check
+                   check_topology.py — the dual-control check
 docs/              architecture.md — the honest AgentCore mapping
 ```
 

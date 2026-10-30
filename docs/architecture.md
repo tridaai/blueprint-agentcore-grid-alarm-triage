@@ -453,6 +453,37 @@ existence hiding, keyed on the incident the review names.
 The review holds one new read shape in the catalogue
 (`get_incident_review`) and operates nothing.
 
+**Topology dual control (Round 16)** closes the declaration
+gap the earlier rounds left: the Round 6 declaration act was
+the record's one remaining single-signature change of
+standing state. A proposal (migration 0015) is an insert-only
+artefact stating the whole declaration it asks for —
+version, proposer, effective time, the payload's change set
+verbatim — and has no effects: nothing loads, nothing is
+declared, re-correlation stays refused. A decision is a
+second named operator's insert-only act; the decider may
+not be the proposer under the repo's name folding, a
+rejection must state its reason, and a proposal's standing
+is the fold of its decisions. Confirmation strikes the
+declaration through the same path the direct act uses, with
+the proposal's provenance (proposer, proposal id) carried
+on the declaration model — declarations struck directly
+carry neither field. While a proposal stands pending, the
+direct declaration of its version is refused by name; the
+direct act otherwise remains, and the README's honest
+status states that limit plainly. `verify_proposal`
+re-performs a standing from the artefacts (id recomputation,
+change-set agreement with the payload, decision-fold
+legality, declaration agreement), so a forged decision
+inserted at the store is named rather than folded in
+silently. Both acts are access-pack acts
+(`propose_topology`, `decide_topology`) on the topology
+surface, granted to operator and duty manager — the same
+roles the topology pack itself states. No new tool shape
+enters the catalogue: governing a declaration is an
+operator act on the API, CLI and Runtime surfaces, and the
+agent's topology reads are unchanged.
+
 ## Stores
 
 One store port, two dialects (`grid_triage/store.py`): SQLite

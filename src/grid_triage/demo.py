@@ -814,6 +814,83 @@ def run_demo(settings: Settings | None = None) -> Services:
         f"verifier problems: "
         f"{svc.reviews.verify_review(storm_review.review_id)}."
     )
+
+    # Round 16: topology dual control — on a fresh deployment,
+    # the declaration of v2 goes through the second pair of
+    # eyes. The proposal changes nothing; the proposer cannot
+    # decide it; the direct route is blocked while it stands;
+    # a second operator's confirmation strikes exactly the
+    # declaration proposed, and the flood re-correlates.
+    from grid_triage.revisions import TopologyRefusal
+
+    tmp16 = Path(tempfile.mkdtemp(prefix="grid-demo-r16-"))
+    svc16 = Services(
+        Settings(
+            sqlite_path=str(tmp16 / "grid.db"),
+            object_store_dir=str(tmp16 / "objects"),
+        )
+    )
+    svc16.intake.ingest_feed(svc16.feed.fetch_alarms())
+    created16 = svc16.correlator.correlate_new(svc16.topology)
+    flood16 = next(
+        i for i in created16 if i.anchor_alarm_id == FLOOD_ALARM_IDS[0]
+    )
+    proposed_at = datetime(2026, 10, 17, 10, 0, tzinfo=timezone.utc)
+    effective_at = datetime(2026, 10, 17, 11, 0, tzinfo=timezone.utc)
+    proposal = svc16.topology_acts.propose(
+        "v2", "op.dana", "operator", proposed_at, effective_at
+    )
+    print(
+        f"Dual control: proposal {proposal.proposal_id} by "
+        f"op.dana states v2 effective {effective_at.isoformat()}; "
+        f"declaration struck so far: "
+        f"{svc16.topology_acts.declaration_for('v2') is not None}."
+    )
+    try:
+        svc16.topology_acts.decide(
+            proposal.proposal_id,
+            "OP.DANA",
+            "operator",
+            proposed_at + timedelta(minutes=5),
+            "confirmed",
+        )
+        print("ERROR: the proposer decided their own proposal")
+    except TopologyRefusal as exc:
+        print(
+            "Dual control: the proposer's own confirmation was "
+            f"refused ({exc.problems[0]})."
+        )
+    try:
+        svc16.topology_acts.declare(
+            "v2", "op.dana", "operator", proposed_at, effective_at
+        )
+        print("ERROR: a direct declaration landed over a pending proposal")
+    except TopologyRefusal as exc:
+        print(
+            "Dual control: the direct declaration was blocked "
+            f"while the proposal stands ({exc.problems[0]})."
+        )
+    decision, declaration16 = svc16.topology_acts.decide(
+        proposal.proposal_id,
+        "dm.reyes",
+        "duty_manager",
+        proposed_at + timedelta(minutes=20),
+        "confirmed",
+    )
+    revision16 = svc16.revisions.recorrelate(
+        flood16.incident_id,
+        "op.dana",
+        "operator",
+        effective_at + timedelta(minutes=30),
+    )
+    print(
+        f"Dual control: confirmed by {decision.decided_by}; "
+        f"declaration {declaration16.declaration_id} names its "
+        f"proposer ({declaration16.proposed_by}) and its "
+        f"proposal; the flood re-correlated as "
+        f"{revision16.revised_incident_id}; verifier problems: "
+        f"{svc16.topology_acts.verify_proposal(proposal.proposal_id)}."
+    )
     return svc
 
 
