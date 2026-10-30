@@ -39,12 +39,17 @@ payload names one piece of triage work:
   anything — approval drafts notifications, it never sends.
 - ``{"action": "post_field_update" | "get_field_updates" |
   "declare_topology" | "get_topology_versions" |
-  "recorrelate_incident" | "get_incident_revisions", ...}`` —
+  "propose_topology" | "decide_topology" |
+  "get_topology_proposals" | "recorrelate_incident" |
+  "get_incident_revisions", ...}`` —
   the Round 6 field updates (recorded against an incident,
   alarm observations correlated under its pinned topology),
   the topology declaration act, and re-correlation under a
   declared version. Declaring and re-correlating are recorded
-  operator acts over data — neither operates anything.
+  operator acts over data — neither operates anything. Round
+  16 adds the declaration's dual-control route: a proposal
+  that changes nothing until a second operator's decision
+  confirms it.
 - ``{"action": "get_quarantine" | "release_quarantine", ...}``
   — the Round 14 quarantine book: an incident's holds in their
   escaped view form, and the named reviewer's release act.
@@ -793,6 +798,78 @@ def handle_invocation(payload: dict, session_id: str | None = None) -> dict:
             "declarations": [
                 d.model_dump(mode="json")
                 for d in svc.topology_acts.declarations()
+            ],
+        }
+    if action == "propose_topology":
+        proposed_at = now
+        if payload.get("proposed_at"):
+            proposed_at = datetime.fromisoformat(payload["proposed_at"])
+        try:
+            proposal = svc.topology_acts.propose(
+                payload.get("version", "v2"),
+                payload.get("proposed_by", ""),
+                payload.get("role", ""),
+                proposed_at,
+                datetime.fromisoformat(payload["effective_at"]),
+                principal=principal,
+            )
+        except AccessDeniedError as exc:
+            return denied_body(exc)
+        except TopologyRefusal as exc:
+            return {"status": "refused", "problems": exc.problems}
+        return {
+            "status": "proposed",
+            "proposal": {
+                **proposal.model_dump(mode="json"),
+                "state": svc.topology_acts.proposal_state(proposal),
+            },
+        }
+    if action == "decide_topology":
+        proposal_id = payload["proposal_id"]
+        decided_at = now
+        if payload.get("decided_at"):
+            decided_at = datetime.fromisoformat(payload["decided_at"])
+        try:
+            record, declaration = svc.topology_acts.decide(
+                proposal_id,
+                payload.get("decided_by", ""),
+                payload.get("role", ""),
+                decided_at,
+                payload.get("decision", ""),
+                reason=payload.get("reason"),
+                principal=principal,
+            )
+        except AccessDeniedError as exc:
+            return denied_body(exc)
+        except KeyError:
+            return {"status": "no_such_proposal", "proposal_id": proposal_id}
+        except TopologyRefusal as exc:
+            return {
+                "status": "refused",
+                "proposal_id": proposal_id,
+                "problems": exc.problems,
+            }
+        return {
+            "status": record.decision,
+            "decision": record.model_dump(mode="json"),
+            "declaration": (
+                declaration.model_dump(mode="json")
+                if declaration is not None
+                else None
+            ),
+        }
+    if action == "get_topology_proposals":
+        blocked = surface_block(SURFACE_TOPOLOGY)
+        if blocked is not None:
+            return blocked
+        return {
+            "status": "ok",
+            "proposals": [
+                {
+                    **p.model_dump(mode="json"),
+                    "state": svc.topology_acts.proposal_state(p),
+                }
+                for p in svc.topology_acts.proposals()
             ],
         }
     if action == "recorrelate_incident":

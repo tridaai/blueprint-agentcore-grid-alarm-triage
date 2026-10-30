@@ -111,6 +111,20 @@ def main(argv: list[str] | None = None) -> int:
     p_decl.add_argument("--role", required=True, help="the declaring operator's role")
     p_decl.add_argument("--effective-at", required=True, help="ISO timestamp the version takes effect")
     p_decl.add_argument("--declared-at", default=None, help="ISO timestamp; default: now")
+    sub.add_parser("topology-proposals")
+    p_prop = sub.add_parser("propose-topology")
+    p_prop.add_argument("--version", default="v2", help="the topology version to propose")
+    p_prop.add_argument("--by", required=True, help="the proposing operator's name")
+    p_prop.add_argument("--role", required=True, help="the proposing operator's role")
+    p_prop.add_argument("--effective-at", required=True, help="ISO timestamp the version would take effect")
+    p_prop.add_argument("--proposed-at", default=None, help="ISO timestamp; default: now")
+    p_dec = sub.add_parser("decide-topology")
+    p_dec.add_argument("proposal_id")
+    p_dec.add_argument("--by", required=True, help="the deciding operator's name (not the proposer)")
+    p_dec.add_argument("--role", required=True, help="the deciding operator's role")
+    p_dec.add_argument("--decision", required=True, help="confirmed | rejected")
+    p_dec.add_argument("--reason", default=None, help="why — required to reject")
+    p_dec.add_argument("--decided-at", default=None, help="ISO timestamp; default: now")
     p_upd = sub.add_parser("field-update")
     p_upd.add_argument("incident_id")
     p_upd.add_argument("--kind", required=True, help="alarm_observation | crew_note | damage_finding")
@@ -563,6 +577,66 @@ def main(argv: list[str] | None = None) -> int:
             print("refused: " + "; ".join(exc.problems))
             return 1
         print(json.dumps(declaration.model_dump(mode="json"), indent=2))
+    elif args.command == "topology-proposals":
+        print(json.dumps({
+            "proposals": [
+                {
+                    **p.model_dump(mode="json"),
+                    "state": svc.topology_acts.proposal_state(p),
+                }
+                for p in svc.topology_acts.proposals()
+            ],
+        }, indent=2))
+    elif args.command == "propose-topology":
+        proposed_at = (
+            datetime.fromisoformat(args.proposed_at)
+            if args.proposed_at
+            else datetime.now(timezone.utc)
+        )
+        try:
+            proposal = svc.topology_acts.propose(
+                args.version,
+                args.by,
+                args.role,
+                proposed_at,
+                datetime.fromisoformat(args.effective_at),
+            )
+        except TopologyRefusal as exc:
+            print("refused: " + "; ".join(exc.problems))
+            return 1
+        print(json.dumps({
+            **proposal.model_dump(mode="json"),
+            "state": svc.topology_acts.proposal_state(proposal),
+        }, indent=2))
+    elif args.command == "decide-topology":
+        decided_at = (
+            datetime.fromisoformat(args.decided_at)
+            if args.decided_at
+            else datetime.now(timezone.utc)
+        )
+        try:
+            record, declaration = svc.topology_acts.decide(
+                args.proposal_id,
+                args.by,
+                args.role,
+                decided_at,
+                args.decision,
+                reason=args.reason,
+            )
+        except KeyError as exc:
+            print(f"refused: {exc}")
+            return 1
+        except TopologyRefusal as exc:
+            print("refused: " + "; ".join(exc.problems))
+            return 1
+        print(json.dumps({
+            "decision": record.model_dump(mode="json"),
+            "declaration": (
+                declaration.model_dump(mode="json")
+                if declaration is not None
+                else None
+            ),
+        }, indent=2))
     elif args.command == "field-update":
         reported_at = (
             datetime.fromisoformat(args.reported_at)

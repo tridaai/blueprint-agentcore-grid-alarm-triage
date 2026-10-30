@@ -1025,6 +1025,120 @@ def list_topology_declarations(request: Request) -> dict:
     }
 
 
+class ProposeTopologyRequest(BaseModel):
+    version: str = "v2"
+    proposed_by: str
+    role: str
+    proposed_at: datetime | None = None
+    effective_at: datetime
+
+
+@app.post("/topology/propose")
+def propose_topology(
+    request: ProposeTopologyRequest, http_request: Request
+) -> dict:
+    s = svc()
+    principal = _principal(
+        http_request, surface=SURFACE_TOPOLOGY, target=request.version
+    )
+    try:
+        proposal = s.topology_acts.propose(
+            request.version,
+            request.proposed_by,
+            request.role,
+            request.proposed_at or datetime.now(timezone.utc),
+            request.effective_at,
+            principal=principal,
+        )
+    except AccessDeniedError as exc:
+        raise _forbidden(exc) from exc
+    except TopologyRefusal as exc:
+        raise HTTPException(status_code=422, detail={"problems": exc.problems}) from exc
+    return {
+        **proposal.model_dump(mode="json"),
+        "state": s.topology_acts.proposal_state(proposal),
+    }
+
+
+@app.get("/topology/proposals")
+def list_topology_proposals(request: Request) -> dict:
+    if not _list_visible(request, SURFACE_TOPOLOGY):
+        return {"proposals": []}
+    s = svc()
+    return {
+        "proposals": [
+            {
+                **p.model_dump(mode="json"),
+                "state": s.topology_acts.proposal_state(p),
+            }
+            for p in s.topology_acts.proposals()
+        ]
+    }
+
+
+@app.get("/topology/proposals/{proposal_id}")
+def get_topology_proposal(proposal_id: str, request: Request) -> dict:
+    if not _list_visible(request, SURFACE_TOPOLOGY):
+        raise HTTPException(
+            status_code=404, detail=f"no such topology proposal: {proposal_id}"
+        )
+    s = svc()
+    proposal = s.topology_acts.proposal_for(proposal_id)
+    if proposal is None:
+        raise HTTPException(
+            status_code=404, detail=f"no such topology proposal: {proposal_id}"
+        )
+    return {
+        **proposal.model_dump(mode="json"),
+        "state": s.topology_acts.proposal_state(proposal),
+        "decisions": [
+            d.model_dump(mode="json")
+            for d in s.topology_acts.decisions_for(proposal_id)
+        ],
+        "problems": s.topology_acts.verify_proposal(proposal_id),
+    }
+
+
+class DecideTopologyRequest(BaseModel):
+    decided_by: str
+    role: str
+    decision: str
+    reason: str | None = None
+    decided_at: datetime | None = None
+
+
+@app.post("/topology/proposals/{proposal_id}/decide")
+def decide_topology_proposal(
+    proposal_id: str, request: DecideTopologyRequest, http_request: Request
+) -> dict:
+    s = svc()
+    principal = _principal(
+        http_request, surface=SURFACE_TOPOLOGY, target=proposal_id
+    )
+    try:
+        record, declaration = s.topology_acts.decide(
+            proposal_id,
+            request.decided_by,
+            request.role,
+            request.decided_at or datetime.now(timezone.utc),
+            request.decision,
+            reason=request.reason,
+            principal=principal,
+        )
+    except AccessDeniedError as exc:
+        raise _forbidden(exc) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except TopologyRefusal as exc:
+        raise HTTPException(status_code=422, detail={"problems": exc.problems}) from exc
+    return {
+        "decision": record.model_dump(mode="json"),
+        "declaration": (
+            declaration.model_dump(mode="json") if declaration is not None else None
+        ),
+    }
+
+
 class RecorrelateRequest(BaseModel):
     recorrelated_by: str
     role: str
