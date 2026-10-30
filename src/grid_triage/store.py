@@ -55,6 +55,8 @@ from grid_triage.models import (
     StormDeclaration,
     StormReview,
     TopologyDeclaration,
+    TopologyDecision,
+    TopologyProposal,
     WorkOrder,
     WorkOrderAssignment,
     WorkOrderCompletion,
@@ -147,6 +149,18 @@ class Store(Protocol):
     def list_topology_declarations(
         self, version: str | None = None
     ) -> list[TopologyDeclaration]: ...
+    # topology proposals and decisions (Round 16: the
+    # dual-control route to a declaration — proposals and
+    # decisions are insert-only artefacts; a proposal's
+    # standing is the fold of its decisions)
+    def add_topology_proposal(self, proposal: TopologyProposal) -> None: ...
+    def list_topology_proposals(
+        self, version: str | None = None
+    ) -> list[TopologyProposal]: ...
+    def add_topology_decision(self, decision: TopologyDecision) -> None: ...
+    def list_topology_decisions(
+        self, proposal_id: str | None = None
+    ) -> list[TopologyDecision]: ...
     def add_incident_revision(self, revision: IncidentRevision) -> None: ...
     def get_incident_revision(self, revision_id: str) -> IncidentRevision | None: ...
     def list_incident_revisions(self) -> list[IncidentRevision]: ...
@@ -964,6 +978,74 @@ class SqlStore:
                 fetch="all",
             )
         return [TopologyDeclaration.model_validate(json.loads(r[0])) for r in rows]
+
+    def add_topology_proposal(self, proposal: TopologyProposal) -> None:
+        row = self._run(
+            "SELECT COALESCE(MAX(act_seq), 0) FROM topology_proposals",
+            fetch="one",
+        )
+        seq = int(row[0]) + 1
+        self._run(
+            "INSERT INTO topology_proposals (proposal_id, version, act_seq, payload)"
+            " VALUES (?,?,?,?)",
+            (
+                proposal.proposal_id,
+                proposal.version,
+                seq,
+                proposal.model_dump_json(),
+            ),
+        )
+
+    def list_topology_proposals(
+        self, version: str | None = None
+    ) -> list[TopologyProposal]:
+        if version is None:
+            rows = self._run(
+                "SELECT payload FROM topology_proposals ORDER BY act_seq",
+                fetch="all",
+            )
+        else:
+            rows = self._run(
+                "SELECT payload FROM topology_proposals WHERE version = ?"
+                " ORDER BY act_seq",
+                (version,),
+                fetch="all",
+            )
+        return [TopologyProposal.model_validate(json.loads(r[0])) for r in rows]
+
+    def add_topology_decision(self, decision: TopologyDecision) -> None:
+        row = self._run(
+            "SELECT COALESCE(MAX(act_seq), 0) FROM topology_decisions",
+            fetch="one",
+        )
+        seq = int(row[0]) + 1
+        self._run(
+            "INSERT INTO topology_decisions (decision_id, proposal_id, act_seq, payload)"
+            " VALUES (?,?,?,?)",
+            (
+                decision.decision_id,
+                decision.proposal_id,
+                seq,
+                decision.model_dump_json(),
+            ),
+        )
+
+    def list_topology_decisions(
+        self, proposal_id: str | None = None
+    ) -> list[TopologyDecision]:
+        if proposal_id is None:
+            rows = self._run(
+                "SELECT payload FROM topology_decisions ORDER BY act_seq",
+                fetch="all",
+            )
+        else:
+            rows = self._run(
+                "SELECT payload FROM topology_decisions WHERE proposal_id = ?"
+                " ORDER BY act_seq",
+                (proposal_id,),
+                fetch="all",
+            )
+        return [TopologyDecision.model_validate(json.loads(r[0])) for r in rows]
 
     def add_incident_revision(self, revision: IncidentRevision) -> None:
         row = self._run(

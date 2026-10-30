@@ -29,6 +29,29 @@ and Law 7 (every alarm is evidence):
   id. The prior incident's artefacts are never edited. Closed
   incidents are never re-correlated — the attempt is refused
   naming the closure.
+- **Dual control over declarations (Round 16).** The
+  declaration was the one remaining single-signature act that
+  changes standing state territory-wide: one authorised
+  operator made a version effective and unlocked
+  re-correlation under it. Round 16 adds the second pair of
+  eyes the repo's other consequential acts already have (the
+  gated close's confirmation, the quarantine release's
+  second reviewer, the handover's acceptance). A
+  **proposal** states the whole declaration it asks for —
+  version, proposer, effective time, the change set verbatim
+  from the payload — and changes nothing: it loads no
+  payload, strikes no declaration, and no incident can be
+  re-correlated on its strength. A **decision** by a second
+  named operator — never the proposer, compared under the
+  name folding — confirms or rejects it. Confirmation strikes
+  exactly the declaration the proposal stated, with the
+  proposal's provenance on its face; rejection requires a
+  stated reason and strikes nothing. While a proposal for a
+  version stands pending, the direct declaration of that
+  version is blocked: the single-signature route cannot be
+  used to walk around a live proposal. The direct act itself
+  remains for versions no proposal stands over, as the
+  record's pre-R16 route — stated plainly, not hidden.
 """
 
 from __future__ import annotations
@@ -38,9 +61,12 @@ from datetime import datetime
 
 from grid_triage.access import (
     ACT_DECLARE_TOPOLOGY,
+    ACT_DECIDE_TOPOLOGY,
     ACT_POST_FIELD_UPDATE,
+    ACT_PROPOSE_TOPOLOGY,
     ACT_RECORRELATE,
     Principal,
+    fold_name,
     guard_act,
 )
 from grid_triage.cause import CauseService
@@ -53,6 +79,8 @@ from grid_triage.models import (
     Incident,
     IncidentRevision,
     TopologyDeclaration,
+    TopologyDecision,
+    TopologyProposal,
 )
 from grid_triage.quarantine import QuarantineService, screen_text
 from grid_triage.severity import SeverityService, compute_assessment
@@ -79,6 +107,10 @@ TOPOLOGY_PACK = {
     # Versions this build can declare. v1 is the baseline every
     # store starts from; it needs no declaration.
     "declarable_versions": ["v2"],
+    # Round 16: the dual-control decision vocabulary. A
+    # proposal is decided once — confirmed or rejected — by a
+    # second operator, never by its proposer.
+    "decisions": ["confirmed", "rejected"],
 }
 
 TARGET_VERSION = "v2"
@@ -428,6 +460,38 @@ class TopologyService:
     def declarations(self) -> list[TopologyDeclaration]:
         return self.store.list_topology_declarations()
 
+    def _strike_declaration(
+        self,
+        version: str,
+        declared_by: str,
+        role: str,
+        declared_at: datetime,
+        effective_at: datetime,
+        change_set: list,
+        proposed_by: str | None = None,
+        proposal_id: str | None = None,
+    ) -> TopologyDeclaration:
+        """The one path a declaration comes into the record
+        by — the direct act and a dual-control confirmation
+        strike through here, so a declaration's shape never
+        depends on which route struck it."""
+        body = {
+            "version": version,
+            "pack_version": self.pack["version"],
+            "declared_by": declared_by,
+            "role": role,
+            "declared_at": declared_at.isoformat(),
+            "effective_at": effective_at.isoformat(),
+            "change_set": change_set,
+            "proposed_by": proposed_by,
+            "proposal_id": proposal_id,
+        }
+        declaration = TopologyDeclaration(
+            declaration_id=_hash_id("TOPDECL", body), **body
+        )
+        self.store.add_topology_declaration(declaration)
+        return declaration
+
     def declare(
         self,
         version: str,
@@ -467,6 +531,14 @@ class TopologyService:
                 f"topology {version} is already declared effective by "
                 f"{existing.declared_by} (declaration {existing.declaration_id})"
             )
+        pending = self.pending_proposal_for(version)
+        if pending is not None:
+            problems.append(
+                f"topology {version} stands under a pending dual-control "
+                f"proposal ({pending.proposal_id}, proposed by "
+                f"{pending.proposed_by}) — the direct declaration is "
+                "blocked while it stands; decide the proposal first"
+            )
         payload: dict | None = None
         if not problems:
             try:
@@ -477,20 +549,359 @@ class TopologyService:
             raise TopologyRefusal(problems)
         assert payload is not None
         self.store.load_topology(payload, declared_at)
+        return self._strike_declaration(
+            version,
+            declared_by,
+            role,
+            declared_at,
+            effective_at,
+            payload.get("change_set", []),
+        )
+
+    # -- dual control (Round 16) --------------------------------
+    def proposals(self, version: str | None = None) -> list[TopologyProposal]:
+        return self.store.list_topology_proposals(version)
+
+    def proposal_for(self, proposal_id: str) -> TopologyProposal | None:
+        for proposal in self.store.list_topology_proposals():
+            if proposal.proposal_id == proposal_id:
+                return proposal
+        return None
+
+    def decisions_for(self, proposal_id: str) -> list[TopologyDecision]:
+        return self.store.list_topology_decisions(proposal_id)
+
+    def proposal_state(self, proposal: TopologyProposal) -> str:
+        """A proposal's standing is the fold of its decision
+        artefacts: pending until one decision lands, then that
+        decision. A second decision is a corruption the
+        verifier names — the fold here takes the first by act
+        order, as the record stands."""
+        decisions = self.decisions_for(proposal.proposal_id)
+        if not decisions:
+            return "pending"
+        return decisions[0].decision
+
+    def pending_proposal_for(self, version: str) -> TopologyProposal | None:
+        for proposal in self.store.list_topology_proposals(version):
+            if self.proposal_state(proposal) == "pending":
+                return proposal
+        return None
+
+    def propose(
+        self,
+        version: str,
+        proposed_by: str,
+        role: str,
+        proposed_at: datetime,
+        effective_at: datetime,
+        principal: Principal | None = None,
+    ) -> TopologyProposal:
+        """Open a dual-control proposal. The proposal states
+        the whole declaration it asks for and changes nothing:
+        no payload is loaded, no declaration is struck, and
+        re-correlation under the version stays impossible until
+        a second operator confirms."""
+        guard_act(
+            self,
+            principal,
+            ACT_PROPOSE_TOPOLOGY,
+            target=version,
+            actor=proposed_by,
+            act_role=role,
+            at=proposed_at,
+        )
+        problems: list[str] = []
+        if version not in self.pack["declarable_versions"]:
+            problems.append(
+                f"topology version {version!r} cannot be proposed by this "
+                f"build (declarable: {', '.join(self.pack['declarable_versions'])})"
+            )
+        if not proposed_by or not proposed_by.strip():
+            problems.append("a proposal names the operator proposing it")
+        if role not in self.pack["actor_roles"]:
+            problems.append(
+                f"role {role!r} may not propose a topology version (allowed: "
+                f"{', '.join(self.pack['actor_roles'])})"
+            )
+        if effective_at < proposed_at:
+            problems.append("a version cannot be effective before it is proposed")
+        existing = self.declaration_for(version)
+        if existing is not None:
+            problems.append(
+                f"topology {version} is already declared effective by "
+                f"{existing.declared_by} (declaration {existing.declaration_id}) "
+                "— there is nothing to propose"
+            )
+        pending = self.pending_proposal_for(version)
+        if pending is not None:
+            problems.append(
+                f"topology {version} already stands under proposal "
+                f"{pending.proposal_id} (proposed by {pending.proposed_by}) "
+                "— one live proposal per version; decide it first"
+            )
+        payload: dict | None = None
+        if not problems:
+            try:
+                payload = load_topology_file(version)
+            except (FileNotFoundError, KeyError) as exc:
+                problems.append(f"no topology data for version {version}: {exc}")
+        if problems:
+            raise TopologyRefusal(problems)
+        assert payload is not None
         body = {
             "version": version,
             "pack_version": self.pack["version"],
-            "declared_by": declared_by,
+            "proposed_by": proposed_by,
             "role": role,
-            "declared_at": declared_at.isoformat(),
+            "proposed_at": proposed_at.isoformat(),
             "effective_at": effective_at.isoformat(),
             "change_set": payload.get("change_set", []),
         }
-        declaration = TopologyDeclaration(
-            declaration_id=_hash_id("TOPDECL", body), **body
+        proposal = TopologyProposal(proposal_id=_hash_id("TOPPROP", body), **body)
+        self.store.add_topology_proposal(proposal)
+        return proposal
+
+    def decide(
+        self,
+        proposal_id: str,
+        decided_by: str,
+        role: str,
+        decided_at: datetime,
+        decision: str,
+        reason: str | None = None,
+        principal: Principal | None = None,
+    ) -> tuple[TopologyDecision, TopologyDeclaration | None]:
+        """The second pair of eyes. The decider may not be the
+        proposer — under the name folding, so a case or
+        whitespace variant of the proposer's name is the
+        proposer. Confirmation strikes exactly the declaration
+        the proposal stated, with the proposal's provenance on
+        its face; rejection requires a stated reason and
+        strikes nothing. Returns the decision artefact and,
+        on confirmation, the declaration it struck."""
+        guard_act(
+            self,
+            principal,
+            ACT_DECIDE_TOPOLOGY,
+            target=proposal_id,
+            actor=decided_by,
+            act_role=role,
+            at=decided_at,
         )
-        self.store.add_topology_declaration(declaration)
-        return declaration
+        proposal = self.proposal_for(proposal_id)
+        if proposal is None:
+            raise KeyError(f"no such topology proposal: {proposal_id}")
+        problems: list[str] = []
+        if decision not in self.pack["decisions"]:
+            problems.append(
+                f"decision {decision!r} is not in the topology pack "
+                f"(decisions: {', '.join(self.pack['decisions'])})"
+            )
+        if not decided_by or not decided_by.strip():
+            problems.append("a decision names the operator deciding it")
+        if role not in self.pack["actor_roles"]:
+            problems.append(
+                f"role {role!r} may not decide a topology proposal (allowed: "
+                f"{', '.join(self.pack['actor_roles'])})"
+            )
+        if decided_by and fold_name(decided_by) == fold_name(proposal.proposed_by):
+            problems.append(
+                f"dual control: {proposal.proposed_by} proposed "
+                f"{proposal_id} and may not decide it — a second "
+                "operator must confirm or reject"
+            )
+        if decided_at < proposal.proposed_at:
+            problems.append("a decision cannot predate the proposal it decides")
+        standing = self.decisions_for(proposal_id)
+        if standing:
+            problems.append(
+                f"proposal {proposal_id} is already {standing[0].decision} "
+                f"by {standing[0].decided_by} (decision "
+                f"{standing[0].decision_id}) — a decided proposal is not "
+                "decided twice"
+            )
+        if decision == "rejected" and not (reason and reason.strip()):
+            problems.append("a rejection states its reason")
+        if problems:
+            raise TopologyRefusal(problems)
+        body = {
+            "proposal_id": proposal_id,
+            "decision": decision,
+            "decided_by": decided_by,
+            "role": role,
+            "decided_at": decided_at.isoformat(),
+            "reason": reason,
+        }
+        record = TopologyDecision(decision_id=_hash_id("TOPDEC", body), **body)
+        self.store.add_topology_decision(record)
+        declaration: TopologyDeclaration | None = None
+        if decision == "confirmed":
+            payload = load_topology_file(proposal.version)
+            self.store.load_topology(payload, decided_at)
+            declaration = self._strike_declaration(
+                proposal.version,
+                decided_by,
+                role,
+                decided_at,
+                proposal.effective_at,
+                proposal.change_set,
+                proposed_by=proposal.proposed_by,
+                proposal_id=proposal.proposal_id,
+            )
+        return record, declaration
+
+    def verify_proposal(self, proposal_id: str) -> list[str]:
+        """Re-perform one proposal's whole standing from the
+        artefacts of record: the proposal's id recomputes from
+        its stated fields, its change set matches the version
+        payload, its decision fold is legal (at most one
+        decision, in the pack's vocabulary, by a second
+        operator under the folding, in a pack role, not
+        backdated, a rejection reasoned), and the declaration
+        record agrees — a confirmed proposal has exactly the
+        declaration it stated struck under its name, and no
+        other standing has one. Returns the problems named;
+        empty is clean."""
+        proposal = self.proposal_for(proposal_id)
+        if proposal is None:
+            raise KeyError(f"no such topology proposal: {proposal_id}")
+        problems: list[str] = []
+        body = {
+            "version": proposal.version,
+            "pack_version": proposal.pack_version,
+            "proposed_by": proposal.proposed_by,
+            "role": proposal.role,
+            "proposed_at": proposal.proposed_at.isoformat(),
+            "effective_at": proposal.effective_at.isoformat(),
+            "change_set": proposal.change_set,
+        }
+        if _hash_id("TOPPROP", body) != proposal.proposal_id:
+            problems.append(
+                f"proposal {proposal_id}: its id does not recompute from "
+                "its stated fields — the stored artefact is not the "
+                "artefact its id names"
+            )
+        try:
+            payload = load_topology_file(proposal.version)
+            if payload.get("change_set", []) != proposal.change_set:
+                problems.append(
+                    f"proposal {proposal_id}: its change set does not "
+                    f"match the {proposal.version} payload's change set"
+                )
+        except (FileNotFoundError, KeyError) as exc:
+            problems.append(
+                f"proposal {proposal_id}: no topology data for version "
+                f"{proposal.version}: {exc}"
+            )
+        decisions = self.decisions_for(proposal_id)
+        if len(decisions) > 1:
+            problems.append(
+                f"proposal {proposal_id} carries {len(decisions)} "
+                "decisions — a proposal is decided once; the fold "
+                "is ambiguous"
+            )
+        for record in decisions:
+            decision_body = {
+                "proposal_id": record.proposal_id,
+                "decision": record.decision,
+                "decided_by": record.decided_by,
+                "role": record.role,
+                "decided_at": record.decided_at.isoformat(),
+                "reason": record.reason,
+            }
+            if _hash_id("TOPDEC", decision_body) != record.decision_id:
+                problems.append(
+                    f"decision {record.decision_id}: its id does not "
+                    "recompute from its stated fields"
+                )
+            if record.decision not in self.pack["decisions"]:
+                problems.append(
+                    f"decision {record.decision_id}: {record.decision!r} "
+                    "is not a decision the topology pack states"
+                )
+            if fold_name(record.decided_by) == fold_name(proposal.proposed_by):
+                problems.append(
+                    f"decision {record.decision_id}: decided by "
+                    f"{record.decided_by}, the proposal's own proposer "
+                    "under the name folding — dual control does not hold"
+                )
+            if record.role not in self.pack["actor_roles"]:
+                problems.append(
+                    f"decision {record.decision_id}: role "
+                    f"{record.role!r} may not decide a topology proposal"
+                )
+            if record.decided_at < proposal.proposed_at:
+                problems.append(
+                    f"decision {record.decision_id}: decided at "
+                    f"{record.decided_at.isoformat()}, before the "
+                    "proposal it decides was proposed"
+                )
+            if record.decision == "rejected" and not (
+                record.reason and record.reason.strip()
+            ):
+                problems.append(
+                    f"decision {record.decision_id}: a rejection "
+                    "without a stated reason"
+                )
+        state = self.proposal_state(proposal)
+        linked = [
+            d
+            for d in self.store.list_topology_declarations(proposal.version)
+            if d.proposal_id == proposal_id
+        ]
+        if state == "confirmed":
+            if len(linked) != 1:
+                problems.append(
+                    f"proposal {proposal_id} stands confirmed but "
+                    f"{len(linked)} declarations name it — confirmation "
+                    "strikes exactly the one declaration it stated"
+                )
+            else:
+                declaration = linked[0]
+                decision = decisions[0]
+                if declaration.declared_by != decision.decided_by:
+                    problems.append(
+                        f"declaration {declaration.declaration_id}: "
+                        f"declared by {declaration.declared_by}, but the "
+                        f"confirming decision was {decision.decided_by}'s"
+                    )
+                if declaration.proposed_by != proposal.proposed_by:
+                    problems.append(
+                        f"declaration {declaration.declaration_id}: its "
+                        f"proposer reads {declaration.proposed_by!r}, "
+                        f"not the proposal's {proposal.proposed_by!r}"
+                    )
+                if declaration.effective_at != proposal.effective_at:
+                    problems.append(
+                        f"declaration {declaration.declaration_id}: "
+                        "effective at "
+                        f"{declaration.effective_at.isoformat()}, not "
+                        "the proposed "
+                        f"{proposal.effective_at.isoformat()} — a "
+                        "confirmation confirms the proposal as struck, "
+                        "it does not restate it"
+                    )
+                if declaration.change_set != proposal.change_set:
+                    problems.append(
+                        f"declaration {declaration.declaration_id}: its "
+                        "change set is not the proposal's change set"
+                    )
+                if declaration.declared_at != decision.decided_at:
+                    problems.append(
+                        f"declaration {declaration.declaration_id}: "
+                        "declared at "
+                        f"{declaration.declared_at.isoformat()}, not at "
+                        "the confirming decision's "
+                        f"{decision.decided_at.isoformat()}"
+                    )
+        elif linked:
+            problems.append(
+                f"proposal {proposal_id} stands {state} but declaration "
+                f"{linked[0].declaration_id} names it — a declaration "
+                "exists that no confirmation struck"
+            )
+        return problems
 
 
 class RevisionService:

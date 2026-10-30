@@ -457,6 +457,53 @@ class TopologyDeclaration(BaseModel):
     declared_at: datetime
     effective_at: datetime
     change_set: list[dict] = Field(default_factory=list)
+    # Round 16: when the declaration was struck by confirming a
+    # dual-control proposal, the proposal's provenance rides on
+    # the declaration — who proposed it, and under which
+    # proposal artefact. Declarations struck by the direct act
+    # (the pre-R16 route) carry neither.
+    proposed_by: str | None = None
+    proposal_id: str | None = None
+
+
+class TopologyProposal(BaseModel):
+    """A named operator's proposal to declare a topology
+    version effective (Round 16). A proposal is an artefact,
+    not an act with effects: it loads nothing, declares
+    nothing, and no incident can be re-correlated on its
+    strength. It states the whole declaration it asks for —
+    version, proposer, effective time, and the change set
+    carried verbatim from the version payload — so the
+    confirming operator confirms exactly what was proposed,
+    or nothing. Its standing (pending / confirmed / rejected)
+    is the fold of its decision artefacts, never a field."""
+
+    proposal_id: str
+    version: str
+    pack_version: str
+    proposed_by: str
+    role: str
+    proposed_at: datetime
+    effective_at: datetime
+    change_set: list[dict] = Field(default_factory=list)
+
+
+class TopologyDecision(BaseModel):
+    """A second named operator's decision on a topology
+    proposal (Round 16): confirmed or rejected, as an
+    insert-only act. The decider may not be the proposer —
+    compared under the repo's name folding, so a case or
+    whitespace variant of the proposer's name is the proposer.
+    Confirmation strikes the declaration the proposal stated;
+    rejection requires a stated reason and strikes nothing."""
+
+    decision_id: str
+    proposal_id: str
+    decision: str
+    decided_by: str
+    role: str
+    decided_at: datetime
+    reason: str | None = None
 
 
 class IncidentRevision(BaseModel):
