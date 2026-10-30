@@ -1025,6 +1025,16 @@ def list_topology_declarations(request: Request) -> dict:
     }
 
 
+@app.get("/topology/verify")
+def verify_topology_declarations(request: Request) -> dict:
+    # Round 17: re-perform every standing declaration. A
+    # caller the surface hides from reads the standing exactly
+    # as it reads the declarations themselves — as absent.
+    if not _list_visible(request, SURFACE_TOPOLOGY):
+        return {"problems": []}
+    return {"problems": svc().topology_acts.verify_declarations()}
+
+
 class ProposeTopologyRequest(BaseModel):
     version: str = "v2"
     proposed_by: str

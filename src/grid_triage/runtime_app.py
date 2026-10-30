@@ -800,6 +800,14 @@ def handle_invocation(payload: dict, session_id: str | None = None) -> dict:
                 for d in svc.topology_acts.declarations()
             ],
         }
+    if action == "verify_topology":
+        blocked = surface_block(SURFACE_TOPOLOGY)
+        if blocked is not None:
+            return blocked
+        return {
+            "status": "ok",
+            "problems": svc.topology_acts.verify_declarations(),
+        }
     if action == "propose_topology":
         proposed_at = now
         if payload.get("proposed_at"):

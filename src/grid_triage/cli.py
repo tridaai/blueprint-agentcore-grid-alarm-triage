@@ -120,6 +120,8 @@ def main(argv: list[str] | None = None) -> int:
     p_prop.add_argument("--proposed-at", default=None, help="ISO timestamp; default: now")
     p_dec = sub.add_parser("decide-topology")
     p_dec.add_argument("proposal_id")
+    # Round 17: re-perform every standing declaration.
+    sub.add_parser("verify-topology")
     p_dec.add_argument("--by", required=True, help="the deciding operator's name (not the proposer)")
     p_dec.add_argument("--role", required=True, help="the deciding operator's role")
     p_dec.add_argument("--decision", required=True, help="confirmed | rejected")
@@ -637,6 +639,11 @@ def main(argv: list[str] | None = None) -> int:
                 else None
             ),
         }, indent=2))
+    elif args.command == "verify-topology":
+        problems = svc.topology_acts.verify_declarations()
+        print(json.dumps({"problems": problems}, indent=2))
+        if problems:
+            return 1
     elif args.command == "field-update":
         reported_at = (
             datetime.fromisoformat(args.reported_at)
