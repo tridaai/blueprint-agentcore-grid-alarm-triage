@@ -9,7 +9,7 @@ between its alarm streams and its control room: SCADA/OMS alarms
 arrive in floods, and the agent **correlates them into incidents by
 deterministic rules over the network topology, assembles the
 evidence into a cited incident brief, and stops**. A named operator
-will authorise every field action in later rounds. The system can
+authorises every field action. The system can
 read, draft and notify — **it holds no tool that can operate the
 grid, and that is enforced mechanically, not by prompt**.
 
@@ -30,7 +30,7 @@ The promises are precise, and they are enforced in code:
   notify shapes only. A source-scanning test proves no
   control-shaped tool exists in the registry — a switching,
   reclosing, shedding or setpoint tool cannot be added without
-  failing the gate. (A later round adds the AgentCore Policy pack as
+  failing the gate. (Round 18 adds the AgentCore Policy pack as
   the platform layer of the same law.)
 - **Correlation is rules, not vibes.** Alarm-to-incident grouping
   runs a versioned correlation pack over versioned topology data.
@@ -957,6 +957,15 @@ make invoke           # local in-process invoke of the agent step
 
 ## Honest status
 
+**This is the 1.0.0 release (Round 20).** The twenty-round build
+is complete and frozen: every gate was re-run on the release tree
+and the figures are recorded in `docs/release-1.0.0.md`. What
+follows is the release's own account of itself — the gaps stated
+below are the release's limits, unchanged by the version number.
+The work-in-progress notice at the top of this README stays on:
+hands-on developer testing and the companion blog post are still
+outstanding, and the notice comes off when both are done.
+
 What is built and what is not, plainly:
 
 - **Severity is computed (Round 2)** by a versioned formula pack
@@ -1003,8 +1012,8 @@ What is built and what is not, plainly:
   mode that changes correlation, severity and ETR arithmetic
   should begin with a named human's recorded decision. What
   the mode changes is bounded by the storm pack; storm
-  reporting cadence and customer communications are later
-  rounds.
+  reporting cadence and customer communications are not part
+  of this build — they ride the deployment's own channels.
 - **The console and the handover are read-only over the
   record (Round 9)**: the console renders the record, it does
   not operate it — there is no action surface on the page at
@@ -1018,8 +1027,6 @@ What is built and what is not, plainly:
   precisely: staleness is judged over the six sections the
   handover carries, so a figure-preserving artefact like a
   crew note does not stale it.)
-- **Round 10 was a red team, not a feature.** Six defects in
-  the R1–R9 system were found by adversarial probing and
 - **The red-team record (Round 10)** named six defects, all
   fixed (severity/ETR head rewinds, the closure act's missing
   role pack and future-dated restorations, storm overlap at
@@ -1177,6 +1184,9 @@ src/grid_triage/   models, topology, correlation, services (ingest),
                    review (R15), topology dual control in
                    revisions (R16), the direct-route closure
                    and the declaration verifier (R17),
+                   policy (R18), the second red team's fixes
+                   across the screen, the fold and the
+                   verifiers (R19),
                    runtime_app / runtime_main
                    (AgentCore Runtime),
                    api, demo, cli, local_invoke, wiring, config
@@ -1191,7 +1201,11 @@ scripts/           check_console.py — the console correctness check
                    check_quarantine.py — the quarantine context audit
                    check_reviews.py — the incident review check
                    check_topology.py — the dual-control check
+                   check_policy.py — the Policy pack check
+                   check_red_team.py — the second red team check
 docs/              architecture.md — the honest AgentCore mapping
+                   red-team.md — the two red-team records
+                   release-1.0.0.md — the 1.0.0 release notes
 ```
 
 Apache 2.0. See `LICENSE`.
