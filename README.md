@@ -888,6 +888,55 @@ ships it, as a pack in this repo's one pattern:
   exception, so no caller can mistake a denied call's empty
   result for data.
 
+## What Round 19 builds
+
+Round 19 is the second red team: it built nothing new and
+attacked what Rounds 12–18 built — oversight, the gateway
+and its ledger, the quarantine, the review, topology dual
+control and the Policy pack — and found six defects, each
+fixed at the root and recorded as RT-19…RT-24 in
+`docs/red-team.md`:
+
+- **The name folding now folds separators (RT-19).** Every
+  dual-control check compares names under one fold; the fold
+  kept dots, so "op dana" was a different person from
+  "op.dana" — able to release their own held text and to
+  confirm their own topology proposal. The fold now keeps a
+  name's letters and digits and drops the separators
+  between them, at every door that folds.
+- **The quarantine screen reads both base64 alphabets
+  (RT-20).** A URL-safe payload whose separator glyph fell
+  early split below the screen's run length and was no
+  decoded view; URL-safe runs are now normalised and read
+  like any other encoded payload.
+- **The Policy verifier grades the Cedar guard (RT-21).**
+  It compared action lists but never the statement carrying
+  them: a permit stripped of its area condition, its
+  resource binding, or flipped to a forbid verified clean.
+  All three are named drift now.
+- **verify_proposal judges the proposal's own pack
+  (RT-22).** A self-consistent proposal struck under a pack
+  version this build cannot read verified clean; it is
+  named now, and its decision fold is judged under the
+  pack it was struck under — the declarations' rule,
+  applied to proposals.
+- **The ledger verifier names what it cannot price
+  (RT-23).** A record under a profile the pack does not
+  state crashed the verifier with a raw KeyError; it is a
+  named problem and verification continues past it.
+- **An identical re-post is the same act (RT-24).** A
+  field update's id is content-addressed, so a retried
+  submission died on the store's uniqueness constraint;
+  it now returns the standing artefact and records
+  nothing twice.
+
+The round's remaining probes are recorded as RT-25: the
+screen's sub-threshold splits, hex and sentence-break
+evasions are its stated vocabulary limits, pinned in tests
+so changing them is deliberate. `make red-team-check`
+grades the round's claims from planted records, and the
+eval gate carries one zero-tolerance counter per defect.
+
 ## Quick start
 
 ```bash
@@ -899,6 +948,8 @@ make reports-check    # the oversight report check (plants forgeries)
 make ledger-check     # the model ledger check (plants a tamper)
 make quarantine-check # the quarantine check (plants trapped text)
 make topology-check   # the topology dual-control check (plants forgeries)
+make policy-check     # the AgentCore Policy pack check
+make red-team-check   # the second red team check (plants the RT-19…24 attacks)
 make serve            # AgentCore Runtime app on :8080
 make api              # operations API on :8000
 make invoke           # local in-process invoke of the agent step
@@ -1132,7 +1183,7 @@ src/grid_triage/   models, topology, correlation, services (ingest),
 data/topology/     versioned territory data (v1.json, v2.json)
 data/roster/       versioned crew roster artefact (v1.json)
 migrations/        numbered SQL migrations, sqlite + postgres trees
-tests/             pytest suite (340 tests through R18)
+tests/             pytest suite (358 tests through R19)
 evals/             the eval gate (run_evals.py)
 scripts/           check_console.py — the console correctness check
                    check_reports.py — the oversight report check

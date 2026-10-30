@@ -510,6 +510,26 @@ allows. The verifier reads on all three surfaces
 (`GET /topology/verify`, `verify-topology`,
 `verify_topology`); no tool shape enters the catalogue.
 
+**The second red team (Round 19)** added no component
+either; it attacked the surfaces Rounds 12–18 built and
+hardened the canonicalisations and verifiers they stand on
+— the full record is `docs/red-team.md` (RT-19…RT-25).
+The name folding every dual-control comparison uses now
+folds separators as well as case and whitespace, so a
+punctuation variant of a name is the same person at the
+release door, the decision door and the access binding.
+The quarantine screen's decoded views read both base64
+alphabets. The Policy verifier grades each Cedar
+statement's guard — permit form, resource binding, area
+condition — beside its action list. `verify_proposal`
+judges a proposal under the pack it was struck under and
+names one whose pack this build cannot read. The ledger
+verifier names a record whose profile it cannot price
+instead of crashing on it. And an identical re-post of a
+field update returns the standing artefact: a content-
+addressed id makes the retry the same act, not a second
+one and not a store error.
+
 ## Stores
 
 One store port, two dialects (`grid_triage/store.py`): SQLite
