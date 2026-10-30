@@ -50,8 +50,29 @@ and Law 7 (every alarm is evidence):
   version stands pending, the direct declaration of that
   version is blocked: the single-signature route cannot be
   used to walk around a live proposal. The direct act itself
-  remains for versions no proposal stands over, as the
-  record's pre-R16 route — stated plainly, not hidden.
+  remained for versions no proposal stood over, as the
+  record's pre-R16 route — a limit Round 17 closes.
+- **Dual control is the only route (Round 17).** The
+  topology pack's 2026.10.2 version states the build's
+  posture as data (``declaration_route``): the direct
+  declaration act is closed, and ``declare`` refuses every
+  attempt — naming the governed route, striking nothing,
+  loading nothing — whether or not a proposal stands and
+  whoever signs. The closure governs new declarations: the
+  2026.10.1 pack is kept verbatim above the new one, a
+  service struck under it behaves exactly as it did, and a
+  standing direct declaration from the earlier posture stays
+  valid — read, verified and re-correlated under the current
+  one. The bypass that remained is writing the artefact
+  straight into the store, and ``verify_declarations`` meets
+  it: every standing declaration is re-performed (id
+  recomputation, change-set agreement with the payload,
+  pack-role and time legality, one declaration per version),
+  and a direct declaration must carry a pack version from
+  before the closure — one stamped with a pack that closed
+  the direct act names no route that could have struck it.
+  The deep linkage of a proposal-named declaration stays
+  ``verify_proposal``'s job, as it was.
 """
 
 from __future__ import annotations
@@ -98,7 +119,7 @@ UPDATE_PACK = {
     "reporter_roles": ["field_crew", "dispatcher", "operator"],
 }
 
-TOPOLOGY_PACK = {
+TOPOLOGY_PACK_V1 = {
     "version": "2026.10.1",
     # The roles allowed to declare a topology version effective
     # and to re-correlate an incident under it — the control-room
@@ -112,6 +133,32 @@ TOPOLOGY_PACK = {
     # second operator, never by its proposer.
     "decisions": ["confirmed", "rejected"],
 }
+
+# The current pack (Round 17). One change from 2026.10.1: the
+# declaration route is stated, and it is dual control only —
+# the direct act is closed in this build's posture. The
+# 2026.10.1 pack above carries no ``declaration_route`` key
+# and keeps the pre-R17 posture, so a record struck under it
+# re-performs exactly as it did; the closure governs the
+# declarations this build strikes now.
+TOPOLOGY_PACK = {
+    "version": "2026.10.2",
+    "actor_roles": ["operator", "duty_manager"],
+    "declarable_versions": ["v2"],
+    "decisions": ["confirmed", "rejected"],
+    "declaration_route": "dual_control_only",
+}
+
+
+def topology_pack_by_version(version: str) -> dict | None:
+    """The topology pack a standing artefact names, or None
+    when this build cannot read that version. A declaration is
+    judged by the pack it was struck under, not the current
+    one — the correlation pack's standing rule, applied here."""
+    for pack in (TOPOLOGY_PACK_V1, TOPOLOGY_PACK):
+        if pack["version"] == version:
+            return pack
+    return None
 
 TARGET_VERSION = "v2"
 
@@ -539,6 +586,21 @@ class TopologyService:
                 f"{pending.proposed_by}) — the direct declaration is "
                 "blocked while it stands; decide the proposal first"
             )
+        if self.pack.get("declaration_route") == "dual_control_only":
+            # Round 17: the pack states the build's posture —
+            # dual control is the only route to a declaration.
+            # The refusal names the governed route and is total:
+            # it does not depend on a proposal standing, on the
+            # version, or on who signs, and nothing is loaded
+            # or struck on its strength.
+            problems.append(
+                "the direct declaration act is closed under topology "
+                f"pack {self.pack['version']} — dual control is the "
+                "only route to a declaration: propose the version "
+                "(propose_topology) and have a second operator decide "
+                "the proposal (decide_topology); a single signature "
+                "strikes no declaration"
+            )
         payload: dict | None = None
         if not problems:
             try:
@@ -901,6 +963,108 @@ class TopologyService:
                 f"{linked[0].declaration_id} names it — a declaration "
                 "exists that no confirmation struck"
             )
+        return problems
+
+    def verify_declarations(self) -> list[str]:
+        """Re-perform every standing declaration in the record
+        (Round 17). ``verify_proposal`` covers a proposal and
+        the declaration its confirmation struck; a declaration
+        itself — above all one naming no proposal — had no
+        verifier, so a declaration written straight into the
+        store stood on its own say-so. Each declaration is now
+        re-performed on its own terms: its id recomputes from
+        its stated fields; the pack it names is one this build
+        can read, and its role and times are legal under that
+        pack; its change set matches the version payload's;
+        there is one declaration per version; and a direct
+        declaration (one naming no proposal) must carry a pack
+        version from before the direct route closed — a direct
+        declaration stamped with a pack that closed the act
+        names no route that could have struck it. A declaration
+        naming a proposal must name one in the record; the deep
+        agreement between the two stays ``verify_proposal``'s
+        job. Returns the problems named; empty is clean."""
+        problems: list[str] = []
+        declarations = self.store.list_topology_declarations()
+        by_version: dict[str, list[TopologyDeclaration]] = {}
+        for declaration in declarations:
+            by_version.setdefault(declaration.version, []).append(declaration)
+        for version, group in by_version.items():
+            if len(group) > 1:
+                problems.append(
+                    f"topology {version} carries {len(group)} standing "
+                    "declarations — a version is declared once; the "
+                    "record does not say which declaration stands"
+                )
+        for declaration in declarations:
+            body = {
+                "version": declaration.version,
+                "pack_version": declaration.pack_version,
+                "declared_by": declaration.declared_by,
+                "role": declaration.role,
+                "declared_at": declaration.declared_at.isoformat(),
+                "effective_at": declaration.effective_at.isoformat(),
+                "change_set": declaration.change_set,
+                "proposed_by": declaration.proposed_by,
+                "proposal_id": declaration.proposal_id,
+            }
+            if _hash_id("TOPDECL", body) != declaration.declaration_id:
+                problems.append(
+                    f"declaration {declaration.declaration_id}: its id "
+                    "does not recompute from its stated fields — the "
+                    "stored artefact is not the artefact its id names"
+                )
+            pack = topology_pack_by_version(declaration.pack_version)
+            if pack is None:
+                problems.append(
+                    f"declaration {declaration.declaration_id}: struck "
+                    f"under topology pack {declaration.pack_version!r}, "
+                    "which this build cannot read"
+                )
+                continue
+            if declaration.role not in pack["actor_roles"]:
+                problems.append(
+                    f"declaration {declaration.declaration_id}: role "
+                    f"{declaration.role!r} may not declare a topology "
+                    "version under the pack it names"
+                )
+            if declaration.effective_at < declaration.declared_at:
+                problems.append(
+                    f"declaration {declaration.declaration_id}: "
+                    "effective at "
+                    f"{declaration.effective_at.isoformat()}, before it "
+                    f"was declared at "
+                    f"{declaration.declared_at.isoformat()}"
+                )
+            try:
+                payload = load_topology_file(declaration.version)
+                if payload.get("change_set", []) != declaration.change_set:
+                    problems.append(
+                        f"declaration {declaration.declaration_id}: its "
+                        "change set does not match the "
+                        f"{declaration.version} payload's change set"
+                    )
+            except (FileNotFoundError, KeyError) as exc:
+                problems.append(
+                    f"declaration {declaration.declaration_id}: no "
+                    f"topology data for version {declaration.version}: "
+                    f"{exc}"
+                )
+            if declaration.proposal_id is None:
+                if pack.get("declaration_route") == "dual_control_only":
+                    problems.append(
+                        f"declaration {declaration.declaration_id}: a "
+                        "direct declaration — it names no proposal — "
+                        f"stamped with topology pack "
+                        f"{declaration.pack_version}, which closed the "
+                        "direct act; no route the record allows struck it"
+                    )
+            elif self.proposal_for(declaration.proposal_id) is None:
+                problems.append(
+                    f"declaration {declaration.declaration_id}: names "
+                    f"proposal {declaration.proposal_id}, which is not "
+                    "in the record"
+                )
         return problems
 
 
