@@ -47,6 +47,9 @@ quarantine-check:
 reviews-check:
 	uv run python scripts/check_reviews.py
 
+topology-check:
+	uv run python scripts/check_topology.py
+
 serve:
 	uv run grid-agent-serve
 

@@ -1,4 +1,4 @@
-"""Eval gate — Rounds 1–11 (grid alarm triage agent).
+"""Eval gate — Rounds 1–16 (grid alarm triage agent).
 
 Runs the planted streams through the real service graph on a
 throwaway SQLite store and grades the R1–R5 guarantees. Every
@@ -313,6 +313,34 @@ Round 15 counters:
   incident_review_role_errors    a review strike by a read-only
                                  principal that lands, or whose
                                  refusal is not on the denial log
+
+Round 16 counters:
+  topology_proposal_errors       a proposal that strikes a
+                                 declaration or loads a version,
+                                 a standing that does not fold
+                                 from its decisions, or a struck
+                                 standing the verifier does not
+                                 re-perform clean
+  topology_dual_control_errors   a proposer deciding their own
+                                 proposal (exactly, or under the
+                                 name folding), or a propose /
+                                 decide act by a principal the
+                                 access pack refuses that lands,
+                                 or whose refusal is not on the
+                                 denial log
+  topology_decision_errors       a rejection without a reason
+                                 that lands, a decided proposal
+                                 decided twice, a confirmation
+                                 whose declaration is not exactly
+                                 the proposal stated (provenance,
+                                 effective time, change set), or
+                                 re-correlation still refused after
+                                 confirmation
+  topology_bypass_errors         a direct declaration of a
+                                 version that lands while a
+                                 proposal for it stands pending,
+                                 or a re-correlation that lands
+                                 before confirmation
 
 Run: uv run python evals/run_evals.py  (exit 0 = GATE: PASS)
 """
@@ -2776,7 +2804,145 @@ def main() -> int:
         if svc15.store.count_access_denials() != _denials15 + 1:
             counters["incident_review_role_errors"] += 1
 
-    print("Evals — grid alarm triage agent (Rounds 1-15)")
+    # -- Round 16: topology dual control -----------------------
+    # On a hermetic deployment: a proposal changes nothing and
+    # blocks the direct route; the proposer cannot decide it,
+    # exactly or under the folding; a carried principal the
+    # pack refuses is denied and logged; a reasonless rejection
+    # and a second decision are refused; a rejection frees the
+    # version; a confirmation strikes exactly the stated
+    # declaration with its provenance, verifies clean, and
+    # re-correlation then works.
+    counters["topology_proposal_errors"] = 0
+    counters["topology_dual_control_errors"] = 0
+    counters["topology_decision_errors"] = 0
+    counters["topology_bypass_errors"] = 0
+    from grid_triage.access import Principal as _Principal16
+    from grid_triage.config import Settings as _Settings16
+    from grid_triage.revisions import (
+        RevisionRefusal as _RevisionRefusal16,
+    )
+    from grid_triage.revisions import (
+        TopologyRefusal as _TopologyRefusal16,
+    )
+    from grid_triage.wiring import Services as _Services16
+
+    with tempfile.TemporaryDirectory() as _td16:
+        _tmp16 = Path(_td16)
+        svc16 = _Services16(
+            _Settings16(
+                sqlite_path=str(_tmp16 / "grid16.db"),
+                object_store_dir=str(_tmp16 / "objects16"),
+            )
+        )
+        svc16.intake.ingest_feed(svc16.feed.fetch_alarms())
+        _created16 = svc16.correlator.correlate_new(svc16.topology)
+        _flood16 = next(
+            i for i in _created16 if i.anchor_alarm_id == FLOOD_ALARM_IDS[0]
+        ).incident_id
+        _acts16 = svc16.topology_acts
+        _prop_at = T0 + timedelta(hours=4)
+        _eff_at = T0 + timedelta(hours=5)
+        _dec_at = T0 + timedelta(hours=4, minutes=30)
+
+        _proposal16 = _acts16.propose(
+            "v2", "op.dana", "operator", _prop_at, _eff_at
+        )
+        if _acts16.declaration_for("v2") is not None:
+            counters["topology_proposal_errors"] += 1
+        if _acts16.proposal_state(_proposal16) != "pending":
+            counters["topology_proposal_errors"] += 1
+        try:
+            svc16.revisions.recorrelate(_flood16, "op.dana", "operator", _dec_at)
+            counters["topology_bypass_errors"] += 1
+        except _RevisionRefusal16:
+            pass
+        try:
+            _acts16.declare("v2", "op.dana", "operator", _prop_at, _eff_at)
+            counters["topology_bypass_errors"] += 1
+        except _TopologyRefusal16:
+            pass
+        for _self16 in ("op.dana", "OP.DANA"):
+            try:
+                _acts16.decide(
+                    _proposal16.proposal_id, _self16, "operator",
+                    _dec_at, "confirmed",
+                )
+                counters["topology_dual_control_errors"] += 1
+            except _TopologyRefusal16:
+                pass
+        _denials16 = svc16.store.count_access_denials()
+        try:
+            _acts16.propose(
+                "v2", "dp.osei", "dispatcher", _prop_at, _eff_at,
+                principal=_Principal16(id="dp.osei", role="dispatcher"),
+            )
+            counters["topology_dual_control_errors"] += 1
+        except AccessDeniedError:
+            pass
+        if svc16.store.count_access_denials() != _denials16 + 1:
+            counters["topology_dual_control_errors"] += 1
+        try:
+            _acts16.decide(
+                _proposal16.proposal_id, "dm.reyes", "duty_manager",
+                _dec_at, "rejected",
+            )
+            counters["topology_decision_errors"] += 1
+        except _TopologyRefusal16:
+            pass
+        _rej16, _rej_decl16 = _acts16.decide(
+            _proposal16.proposal_id, "dm.reyes", "duty_manager",
+            _dec_at, "rejected", reason="the v2 split is not surveyed yet",
+        )
+        if _rej_decl16 is not None or _acts16.declaration_for("v2") is not None:
+            counters["topology_decision_errors"] += 1
+        if _acts16.proposal_state(_proposal16) != "rejected":
+            counters["topology_proposal_errors"] += 1
+        if _acts16.verify_proposal(_proposal16.proposal_id):
+            counters["topology_proposal_errors"] += 1
+        try:
+            _acts16.decide(
+                _proposal16.proposal_id, "op.dana", "operator",
+                _dec_at, "confirmed",
+            )
+            counters["topology_decision_errors"] += 1
+        except _TopologyRefusal16:
+            pass
+
+        _proposal16b = _acts16.propose(
+            "v2", "dm.reyes", "duty_manager", _prop_at, _eff_at
+        )
+        _dec16, _decl16 = _acts16.decide(
+            _proposal16b.proposal_id, "op.dana", "operator",
+            _dec_at, "confirmed",
+        )
+        if _decl16 is None:
+            counters["topology_decision_errors"] += 1
+        else:
+            if _decl16.declared_by != "op.dana":
+                counters["topology_decision_errors"] += 1
+            if _decl16.proposed_by != "dm.reyes":
+                counters["topology_decision_errors"] += 1
+            if _decl16.proposal_id != _proposal16b.proposal_id:
+                counters["topology_decision_errors"] += 1
+            if _decl16.effective_at != _eff_at:
+                counters["topology_decision_errors"] += 1
+            if _decl16.change_set != _proposal16b.change_set:
+                counters["topology_decision_errors"] += 1
+        if _acts16.proposal_state(_proposal16b) != "confirmed":
+            counters["topology_proposal_errors"] += 1
+        if _acts16.verify_proposal(_proposal16b.proposal_id):
+            counters["topology_proposal_errors"] += 1
+        try:
+            _rev16 = svc16.revisions.recorrelate(
+                _flood16, "op.dana", "operator", T0 + timedelta(hours=6)
+            )
+            if _rev16.target_topology_version != "v2":
+                counters["topology_decision_errors"] += 1
+        except _RevisionRefusal16:
+            counters["topology_decision_errors"] += 1
+
+    print("Evals — grid alarm triage agent (Rounds 1-16)")
     for name, value in counters.items():
         print(f"  {name}: {value} (required 0)")
     failed = [n for n, v in counters.items() if v != 0]
