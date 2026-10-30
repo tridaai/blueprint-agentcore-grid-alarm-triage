@@ -246,8 +246,14 @@ def test_rt10_the_gated_close_and_the_revision_cycle_hold(fed):
             FLOOD, "op.dana", "operator", T0 + timedelta(minutes=270),
             "Done.", recorded_at=T0 + timedelta(minutes=300),
         )
-    fed.topology_acts.declare("v2", "op.dana", "operator",
-                              T0 + timedelta(hours=1), T0 + timedelta(hours=2))
+    # Round 17: the declaration is struck through the governed
+    # route — the direct act is closed.
+    _proposal10 = fed.topology_acts.propose(
+        "v2", "op.dana", "operator",
+        T0 + timedelta(hours=1), T0 + timedelta(hours=2))
+    fed.topology_acts.decide(_proposal10.proposal_id, "dm.reyes",
+                             "duty_manager", T0 + timedelta(hours=1),
+                             "confirmed")
     revision = fed.revisions.recorrelate(FLOOD, "op.dana", "operator",
                                          T0 + timedelta(hours=3))
     with pytest.raises(RevisionRefusal):

@@ -41,13 +41,27 @@ def _sensor_alarm(alarm_id="ALM-UPD-001") -> Alarm:
 
 
 def _declare(svc, effective=None):
-    return svc.topology_acts.declare(
+    # Round 17: the direct act is closed, so the fixture
+    # strikes the declaration through the governed route —
+    # proposed by op.dana a day before the flood and confirmed
+    # at the same instant by a second operator, leaving the
+    # declaration effective exactly where the direct act used
+    # to put it.
+    proposal = svc.topology_acts.propose(
         "v2",
         "op.dana",
         "operator",
         T0 - timedelta(days=1),
         effective or (T0 - timedelta(days=1)),
     )
+    _, declaration = svc.topology_acts.decide(
+        proposal.proposal_id,
+        "dm.reyes",
+        "duty_manager",
+        T0 - timedelta(days=1),
+        "confirmed",
+    )
+    return declaration
 
 
 # -- field updates ----------------------------------------------------

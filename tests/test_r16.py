@@ -92,8 +92,12 @@ def test_pending_proposal_blocks_direct_declare(services):
 
 
 def test_propose_after_declaration_refused(services):
-    services.topology_acts.declare(
-        "v2", "op.dana", "operator", PROPOSED_AT, EFFECTIVE_AT
+    # Round 17: the standing declaration is struck through the
+    # governed route (the direct act is closed).
+    proposal = _propose(services)
+    services.topology_acts.decide(
+        proposal.proposal_id, "dm.reyes", "duty_manager",
+        DECIDED_AT, "confirmed",
     )
     with pytest.raises(TopologyRefusal):
         _propose(services)
@@ -157,12 +161,16 @@ def test_rejection_needs_a_reason_and_strikes_nothing(services):
     assert acts.declaration_for("v2") is None
     assert acts.proposal_state(proposal) == "rejected"
     assert acts.verify_proposal(proposal.proposal_id) == []
-    # The version is free again: a fresh proposal, or the
-    # direct act, may proceed.
-    declaration = acts.declare(
-        "v2", "op.dana", "operator", PROPOSED_AT, EFFECTIVE_AT
-    )
-    assert declaration.proposal_id is None
+    # The version is free again for a fresh proposal. Round 17
+    # closes the other half of this sentence as it stood in
+    # R16: the direct act does not proceed — it refuses,
+    # naming the governed route, and strikes nothing.
+    with pytest.raises(TopologyRefusal) as exc:
+        acts.declare(
+            "v2", "op.dana", "operator", PROPOSED_AT, EFFECTIVE_AT
+        )
+    assert any("closed" in p for p in exc.value.problems)
+    assert acts.declaration_for("v2") is None
 
 
 def test_a_decided_proposal_is_not_decided_twice(services):

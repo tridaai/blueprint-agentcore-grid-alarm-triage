@@ -1,4 +1,4 @@
-"""Eval gate — Rounds 1–16 (grid alarm triage agent).
+"""Eval gate — Rounds 1–17 (grid alarm triage agent).
 
 Runs the planted streams through the real service graph on a
 throwaway SQLite store and grades the R1–R5 guarantees. Every
@@ -341,6 +341,35 @@ Round 16 counters:
                                  proposal for it stands pending,
                                  or a re-correlation that lands
                                  before confirmation
+
+Round 17 counters:
+  topology_direct_route_errors   a direct declaration under
+                                 the current pack that lands,
+                                 loads a version, or refuses
+                                 without naming the governed
+                                 route — by any signer, with or
+                                 without a proposal standing,
+                                 before or after one is decided
+  topology_access_route_errors   a principal-carrying direct
+                                 declaration the access pack
+                                 refuses that is not denied and
+                                 logged at the guard, or a
+                                 granted principal's attempt
+                                 that is not refused by the
+                                 service behind the guard
+  topology_historical_declaration_errors
+                                 a direct declaration struck
+                                 under the 2026.10.1 pack that
+                                 does not stand, does not
+                                 verify, or does not
+                                 re-correlate under the
+                                 current pack
+  topology_declaration_verify_errors
+                                 a forged or tampered
+                                 declaration inserted at the
+                                 store that the declaration
+                                 verifier does not name, or a
+                                 clean standing it names
 
 Run: uv run python evals/run_evals.py  (exit 0 = GATE: PASS)
 """
@@ -1198,10 +1227,16 @@ def main() -> int:
         else 1
     )
 
-    svc.topology_acts.declare(
+    # Round 17: struck through the governed route — the
+    # direct act is closed.
+    _r6_proposal = svc.topology_acts.propose(
         "v2", "op.dana", "operator",
         datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc),
         datetime(2026, 10, 15, 0, 0, tzinfo=timezone.utc),
+    )
+    svc.topology_acts.decide(
+        _r6_proposal.proposal_id, "dm.reyes", "duty_manager",
+        datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc), "confirmed",
     )
     counters["v1_incident_mutation_errors"] = (
         0
@@ -2942,7 +2977,234 @@ def main() -> int:
         except _RevisionRefusal16:
             counters["topology_decision_errors"] += 1
 
-    print("Evals — grid alarm triage agent (Rounds 1-16)")
+    # -- Round 17: dual control is the only route --------------
+    # On hermetic deployments: the direct declaration act
+    # refuses under the current pack — by any signer, with no
+    # proposal standing, after a rejection, and after a
+    # confirmation — naming the governed route and striking
+    # and loading nothing; the guard still denies an ungranted
+    # principal before the service, while a granted principal
+    # is refused behind it with no denial logged; a direct
+    # declaration struck under the 2026.10.1 pack stands,
+    # verifies and re-correlates under the current one; and
+    # declarations forged or tampered at the store are named
+    # by the declaration verifier.
+    counters["topology_direct_route_errors"] = 0
+    counters["topology_access_route_errors"] = 0
+    counters["topology_historical_declaration_errors"] = 0
+    counters["topology_declaration_verify_errors"] = 0
+    from grid_triage.access import Principal as _Principal17
+    from grid_triage.config import Settings as _Settings17
+    from grid_triage.models import TopologyDeclaration as _Decl17
+    from grid_triage.revisions import (
+        TOPOLOGY_PACK_V1 as _TopoPackV1_17,
+    )
+    from grid_triage.revisions import (
+        RevisionRefusal as _RevisionRefusal17,
+    )
+    from grid_triage.revisions import (
+        TopologyRefusal as _TopologyRefusal17,
+    )
+    from grid_triage.revisions import (
+        TopologyService as _TopologyService17,
+    )
+    from grid_triage.revisions import _hash_id as _hash_id17
+    from grid_triage.topology import load_topology_file as _load_topo17
+    from grid_triage.wiring import Services as _Services17
+
+    def _route_named17(problems) -> bool:
+        return any(
+            "closed" in p and "decide_topology" in p for p in problems
+        )
+
+    def _direct_refused17(acts, **kw) -> None:
+        try:
+            acts.declare(
+                kw.get("version", "v2"),
+                kw.get("by", "op.dana"),
+                kw.get("role", "operator"),
+                kw.get("at", _prop17),
+                kw.get("effective", _eff17),
+            )
+            counters["topology_direct_route_errors"] += 1
+        except _TopologyRefusal17 as exc:
+            if not _route_named17(exc.problems):
+                counters["topology_direct_route_errors"] += 1
+
+    _prop17 = T0 + timedelta(hours=4)
+    _eff17 = T0 + timedelta(hours=5)
+    _dec17 = T0 + timedelta(hours=4, minutes=30)
+
+    with tempfile.TemporaryDirectory() as _td17:
+        _tmp17 = Path(_td17)
+        svc17 = _Services17(
+            _Settings17(
+                sqlite_path=str(_tmp17 / "grid17.db"),
+                object_store_dir=str(_tmp17 / "objects17"),
+            )
+        )
+        svc17.intake.ingest_feed(svc17.feed.fetch_alarms())
+        _created17 = svc17.correlator.correlate_new(svc17.topology)
+        _flood17 = next(
+            i for i in _created17 if i.anchor_alarm_id == FLOOD_ALARM_IDS[0]
+        ).incident_id
+        _acts17 = svc17.topology_acts
+
+        _direct_refused17(_acts17)
+        _direct_refused17(_acts17, by="dm.reyes", role="duty_manager")
+        if _acts17.declaration_for("v2") is not None:
+            counters["topology_direct_route_errors"] += 1
+        if svc17.store.list_topology_versions() != ["v1"]:
+            counters["topology_direct_route_errors"] += 1
+
+        _denials17 = svc17.store.count_access_denials()
+        try:
+            _acts17.declare(
+                "v2", "dp.osei", "dispatcher", _prop17, _eff17,
+                principal=_Principal17(id="dp.osei", role="dispatcher"),
+            )
+            counters["topology_access_route_errors"] += 1
+        except AccessDeniedError:
+            pass
+        except _TopologyRefusal17:
+            counters["topology_access_route_errors"] += 1
+        if svc17.store.count_access_denials() != _denials17 + 1:
+            counters["topology_access_route_errors"] += 1
+        try:
+            _acts17.declare(
+                "v2", "op.dana", "operator", _prop17, _eff17,
+                principal=_Principal17(id="op.dana", role="operator"),
+            )
+            counters["topology_access_route_errors"] += 1
+        except _TopologyRefusal17 as exc:
+            if not _route_named17(exc.problems):
+                counters["topology_access_route_errors"] += 1
+        if svc17.store.count_access_denials() != _denials17 + 1:
+            counters["topology_access_route_errors"] += 1
+
+        _proposal17 = _acts17.propose(
+            "v2", "op.dana", "operator", _prop17, _eff17
+        )
+        _acts17.decide(
+            _proposal17.proposal_id, "dm.reyes", "duty_manager",
+            _dec17, "rejected",
+            reason="the v2 split is not surveyed yet",
+        )
+        _direct_refused17(_acts17)
+
+        # The second proposal is a different artefact (a
+        # re-proposal identical in every field would be the
+        # same content-addressed proposal), so the duty
+        # manager proposes and the operator confirms.
+        _proposal17b = _acts17.propose(
+            "v2", "dm.reyes", "duty_manager", _prop17, _eff17
+        )
+        _, _decl17 = _acts17.decide(
+            _proposal17b.proposal_id, "op.dana", "operator",
+            _dec17, "confirmed",
+        )
+        if _decl17 is None or _decl17.pack_version != "2026.10.2":
+            counters["topology_direct_route_errors"] += 1
+        if _acts17.verify_declarations():
+            counters["topology_declaration_verify_errors"] += 1
+        if _acts17.verify_proposal(_proposal17b.proposal_id):
+            counters["topology_declaration_verify_errors"] += 1
+        _direct_refused17(_acts17)
+        try:
+            _rev17 = svc17.revisions.recorrelate(
+                _flood17, "op.dana", "operator", T0 + timedelta(hours=6)
+            )
+            if _rev17.target_topology_version != "v2":
+                counters["topology_direct_route_errors"] += 1
+        except _RevisionRefusal17:
+            counters["topology_direct_route_errors"] += 1
+
+    with tempfile.TemporaryDirectory() as _td17b:
+        _tmp17b = Path(_td17b)
+        svc17b = _Services17(
+            _Settings17(
+                sqlite_path=str(_tmp17b / "grid17b.db"),
+                object_store_dir=str(_tmp17b / "objects17b"),
+            )
+        )
+        svc17b.intake.ingest_feed(svc17b.feed.fetch_alarms())
+        _created17b = svc17b.correlator.correlate_new(svc17b.topology)
+        _flood17b = next(
+            i for i in _created17b if i.anchor_alarm_id == FLOOD_ALARM_IDS[0]
+        ).incident_id
+        _legacy17 = _TopologyService17(svc17b.store, pack=_TopoPackV1_17)
+        _hist_decl17 = _legacy17.declare(
+            "v2", "op.dana", "operator",
+            T0 - timedelta(days=1), T0 - timedelta(days=1),
+        )
+        if (
+            _hist_decl17.proposal_id is not None
+            or _hist_decl17.pack_version != "2026.10.1"
+        ):
+            counters["topology_historical_declaration_errors"] += 1
+        if svc17b.topology_acts.declaration_for("v2") != _hist_decl17:
+            counters["topology_historical_declaration_errors"] += 1
+        if svc17b.topology_acts.verify_declarations():
+            counters["topology_historical_declaration_errors"] += 1
+        try:
+            _rev17b = svc17b.revisions.recorrelate(
+                _flood17b, "op.dana", "operator",
+                T0 + timedelta(minutes=50),
+            )
+            if _rev17b.target_topology_version != "v2":
+                counters["topology_historical_declaration_errors"] += 1
+        except _RevisionRefusal17:
+            counters["topology_historical_declaration_errors"] += 1
+
+    with tempfile.TemporaryDirectory() as _td17c:
+        _tmp17c = Path(_td17c)
+        svc17c = _Services17(
+            _Settings17(
+                sqlite_path=str(_tmp17c / "grid17c.db"),
+                object_store_dir=str(_tmp17c / "objects17c"),
+            )
+        )
+        _acts17c = svc17c.topology_acts
+        if _acts17c.verify_declarations():
+            counters["topology_declaration_verify_errors"] += 1
+        _body17 = {
+            "version": "v2",
+            "pack_version": "2026.10.2",
+            "declared_by": "op.dana",
+            "role": "operator",
+            "declared_at": _prop17.isoformat(),
+            "effective_at": _eff17.isoformat(),
+            "change_set": _load_topo17("v2")["change_set"],
+            "proposed_by": None,
+            "proposal_id": None,
+        }
+        _forged17 = _Decl17(
+            declaration_id=_hash_id17("TOPDECL", _body17), **_body17
+        )
+        svc17c.store.add_topology_declaration(_forged17)
+        _problems17 = _acts17c.verify_declarations()
+        if not any(
+            "no route the record allows" in p for p in _problems17
+        ):
+            counters["topology_declaration_verify_errors"] += 1
+        _body17t = dict(
+            _body17,
+            pack_version="2026.10.1",
+            change_set=_body17["change_set"][:-1],
+        )
+        _tampered17 = _Decl17(
+            declaration_id=_hash_id17("TOPDECL", _body17t), **_body17t
+        )
+        svc17c.store.add_topology_declaration(_tampered17)
+        _problems17 = _acts17c.verify_declarations()
+        if not any("change set does not match" in p for p in _problems17):
+            counters["topology_declaration_verify_errors"] += 1
+        if not any(
+            "carries 2 standing declarations" in p for p in _problems17
+        ):
+            counters["topology_declaration_verify_errors"] += 1
+
+    print("Evals — grid alarm triage agent (Rounds 1-17)")
     for name, value in counters.items():
         print(f"  {name}: {value} (required 0)")
     failed = [n for n, v in counters.items() if v != 0]

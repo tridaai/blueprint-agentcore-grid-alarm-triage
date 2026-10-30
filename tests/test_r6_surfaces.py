@@ -80,18 +80,33 @@ def test_api_round6_flow(client):
         for p in too_early.json()["detail"]["problems"]
     )
 
-    declared = client.post(
-        "/topology/declare",
+    # Round 17: the declaration is struck through the governed
+    # route at this surface too — a proposal, then a second
+    # operator's decision. A direct declaration refuses.
+    proposed = client.post(
+        "/topology/propose",
         json={
             "version": "v2",
-            "declared_by": "op.dana",
+            "proposed_by": "op.dana",
             "role": "operator",
-            "declared_at": DECLARE_AT,
+            "proposed_at": DECLARE_AT,
             "effective_at": EFFECTIVE_AT,
         },
     )
-    assert declared.status_code == 200
-    assert len(declared.json()["change_set"]) == 4
+    assert proposed.status_code == 200
+    decided = client.post(
+        f"/topology/proposals/{proposed.json()['proposal_id']}/decide",
+        json={
+            "decided_by": "dm.reyes",
+            "role": "duty_manager",
+            "decision": "confirmed",
+            "decided_at": DECLARE_AT,
+        },
+        headers={"x-principal-id": "dm.reyes",
+                 "x-principal-role": "duty_manager"},
+    )
+    assert decided.status_code == 200
+    assert len(decided.json()["declaration"]["change_set"]) == 4
     duplicate = client.post(
         "/topology/declare",
         json={
@@ -142,12 +157,21 @@ def test_runtime_round6_actions(fed):
     assert refused["status"] == "refused"
     assert any("not been declared" in p for p in refused["problems"])
 
-    declared = runtime_app.handle_invocation(
-        {"action": "declare_topology", "version": "v2",
-         "declared_by": "op.dana", "role": "operator",
-         "declared_at": DECLARE_AT, "effective_at": EFFECTIVE_AT}
+    # Round 17: struck through the governed route — propose,
+    # then a second operator's confirming decision.
+    proposed = runtime_app.handle_invocation(
+        {"action": "propose_topology", "version": "v2",
+         "proposed_by": "op.dana", "role": "operator",
+         "proposed_at": DECLARE_AT, "effective_at": EFFECTIVE_AT}
     )
-    assert declared["status"] == "declared"
+    assert proposed["status"] == "proposed"
+    declared = runtime_app.handle_invocation(
+        {"action": "decide_topology",
+         "proposal_id": proposed["proposal"]["proposal_id"],
+         "decided_by": "dm.reyes", "role": "duty_manager",
+         "decision": "confirmed", "decided_at": DECLARE_AT}
+    )
+    assert declared["status"] == "confirmed"
 
     recorded = runtime_app.handle_invocation(
         {"action": "post_field_update", "incident_id": FLOOD,
@@ -189,15 +213,27 @@ def test_runtime_round6_actions(fed):
 def test_cli_round6_flow(fed, monkeypatch, capsys):
     monkeypatch.setenv("SQLITE_PATH", fed.settings.sqlite_path)
     monkeypatch.setenv("OBJECT_STORE_DIR", fed.settings.object_store_dir)
+    # Round 17: struck through the governed route — propose,
+    # then a second operator's confirming decision.
     assert (
         cli.main(
-            ["declare-topology", "--by", "op.dana", "--role", "operator",
-             "--declared-at", DECLARE_AT, "--effective-at", EFFECTIVE_AT]
+            ["propose-topology", "--by", "op.dana", "--role", "operator",
+             "--proposed-at", DECLARE_AT, "--effective-at", EFFECTIVE_AT]
         )
         == 0
     )
-    declaration = json.loads(capsys.readouterr().out)
-    assert declaration["version"] == "v2"
+    proposal = json.loads(capsys.readouterr().out)
+    assert proposal["state"] == "pending"
+    assert (
+        cli.main(
+            ["decide-topology", proposal["proposal_id"],
+             "--by", "dm.reyes", "--role", "duty_manager",
+             "--decision", "confirmed", "--decided-at", DECLARE_AT]
+        )
+        == 0
+    )
+    decided = json.loads(capsys.readouterr().out)
+    assert decided["declaration"]["version"] == "v2"
     assert (
         cli.main(
             ["field-update", FLOOD, "--kind", "crew_note",
