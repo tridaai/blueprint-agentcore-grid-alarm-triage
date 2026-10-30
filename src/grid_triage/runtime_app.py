@@ -83,6 +83,13 @@ payload names one piece of triage work:
   re-performs every figure by an independent path. Aggregate
   only — a report names no incident — and generation is a
   named act judged by the access pack like every act here.
+- ``{"action": "strike_incident_review" | "get_incident_review" |
+  "list_incident_reviews" | "verify_incident_review", ...}`` —
+  the Round 15 post-incident review: the strike act re-performs
+  one incident's whole timeline from its artefacts of record
+  into an insert-only artefact that grades its own
+  completeness; reads are existence-hidden on the incident
+  the review names, exactly as the incident itself is.
 - Round 11: any payload may carry ``"principal": {"id": ...,
   "role": ...}``. A carried principal is authenticated before
   anything runs and judged by the access pack on every action:
@@ -116,6 +123,7 @@ from grid_triage.access import (
     SURFACE_FIELD_UPDATES,
     SURFACE_QUARANTINE,
     SURFACE_INCIDENT,
+    SURFACE_INCIDENT_REVIEW,
     SURFACE_MEMORY,
     SURFACE_OVERSIGHT,
     SURFACE_PACKS,
@@ -141,6 +149,7 @@ from grid_triage.models import Alarm
 from grid_triage.oversight import OversightRefusal
 from grid_triage.packs import PackRefusal
 from grid_triage.restoration import RestorationRefusal
+from grid_triage.review import ReviewRefusal
 from grid_triage.quarantine import QuarantineRefusal
 from grid_triage.revisions import RevisionRefusal, TopologyRefusal, UpdateRefusal
 from grid_triage.services import DuplicateAlarm
@@ -1298,6 +1307,66 @@ def handle_invocation(payload: dict, session_id: str | None = None) -> dict:
             "status": "ok",
             "report_id": payload.get("report_id"),
             "problems": problems,
+        }
+    if action == "strike_incident_review":
+        incident_id = payload.get("incident_id", "")
+        if hidden(incident_id, SURFACE_INCIDENT_REVIEW):
+            return {"status": "no_such_incident", "incident_id": incident_id}
+        struck_at = now
+        if payload.get("struck_at"):
+            struck_at = datetime.fromisoformat(payload["struck_at"])
+        try:
+            review = svc.reviews.strike(
+                incident_id,
+                payload.get("struck_by", ""),
+                payload.get("role", ""),
+                struck_at,
+                principal=principal,
+            )
+        except AccessDeniedError as exc:
+            return denied_body(exc)
+        except ReviewRefusal as exc:
+            return {"status": "refused", "problems": exc.problems}
+        except KeyError:
+            return {"status": "no_such_incident", "incident_id": incident_id}
+        return {"status": "struck", "review": svc.reviews.view(review)}
+    if action == "get_incident_review":
+        review = svc.reviews.get(payload.get("review_id", ""))
+        if review is None or hidden(
+            review.incident_id, SURFACE_INCIDENT_REVIEW
+        ):
+            return {
+                "status": "no_such_review",
+                "review_id": payload.get("review_id"),
+            }
+        return {"status": "ok", "review": svc.reviews.view(review)}
+    if action == "list_incident_reviews":
+        incident_id = payload.get("incident_id", "")
+        if hidden(incident_id, SURFACE_INCIDENT_REVIEW):
+            return {"status": "no_such_incident", "incident_id": incident_id}
+        if svc.store.get_incident(incident_id) is None:
+            return {"status": "no_such_incident", "incident_id": incident_id}
+        return {
+            "status": "ok",
+            "incident_id": incident_id,
+            "reviews": [
+                svc.reviews.view(r)
+                for r in svc.reviews.reviews(incident_id)
+            ],
+        }
+    if action == "verify_incident_review":
+        review = svc.reviews.get(payload.get("review_id", ""))
+        if review is None or hidden(
+            review.incident_id, SURFACE_INCIDENT_REVIEW
+        ):
+            return {
+                "status": "no_such_review",
+                "review_id": payload.get("review_id"),
+            }
+        return {
+            "status": "ok",
+            "review_id": review.review_id,
+            "problems": svc.reviews.verify_review(review.review_id),
         }
     if action == "ingest_and_brief":
         alarms = [Alarm.model_validate(a) for a in payload.get("alarms", [])]

@@ -19,6 +19,7 @@ from grid_triage.oversight import OversightRefusal
 from grid_triage.packs import PackRefusal
 from grid_triage.quarantine import QuarantineRefusal
 from grid_triage.restoration import RestorationRefusal
+from grid_triage.review import ReviewRefusal
 from grid_triage.revisions import RevisionRefusal, TopologyRefusal, UpdateRefusal
 from grid_triage.severity import SeverityRefusal
 from grid_triage.storm import StormRefusal
@@ -235,6 +236,16 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("oversight-reports")
     p_ovv = sub.add_parser("oversight-verify")
     p_ovv.add_argument("report_id")
+    # Round 15: the post-incident review.
+    p_rev = sub.add_parser("incident-review")
+    p_rev.add_argument("incident_id")
+    p_rev.add_argument("--by", required=True, help="the operator striking the review")
+    p_rev.add_argument("--role", required=True, help="the striking operator's role")
+    p_rev.add_argument("--at", default=None, help="ISO timestamp; default: now")
+    p_revl = sub.add_parser("incident-reviews")
+    p_revl.add_argument("incident_id")
+    p_revv = sub.add_parser("review-verify")
+    p_revv.add_argument("review_id")
     # Round 11: the access layer's own reads. The CLI is the
     # trusted local path — it carries no principal; these two
     # views exist so the room can inspect the rules and the
@@ -964,6 +975,42 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(json.dumps(
             {"report_id": args.report_id, "problems": problems}, indent=2
+        ))
+        if problems:
+            return 1
+    elif args.command == "incident-review":
+        struck_at = (
+            datetime.fromisoformat(args.at)
+            if args.at
+            else datetime.now(timezone.utc)
+        )
+        try:
+            review = svc.reviews.strike(
+                args.incident_id, args.by, args.role, struck_at
+            )
+        except KeyError:
+            print(f"no such incident: {args.incident_id}")
+            return 1
+        except ReviewRefusal as exc:
+            print("refused: " + "; ".join(exc.problems))
+            return 1
+        print(json.dumps(svc.reviews.view(review), indent=2))
+    elif args.command == "incident-reviews":
+        if svc.store.get_incident(args.incident_id) is None:
+            print(f"no such incident: {args.incident_id}")
+            return 1
+        print(json.dumps(
+            [svc.reviews.view(r) for r in svc.reviews.reviews(args.incident_id)],
+            indent=2,
+        ))
+    elif args.command == "review-verify":
+        try:
+            problems = svc.reviews.verify_review(args.review_id)
+        except KeyError:
+            print(f"no such incident review: {args.review_id}")
+            return 1
+        print(json.dumps(
+            {"review_id": args.review_id, "problems": problems}, indent=2
         ))
         if problems:
             return 1

@@ -103,6 +103,11 @@ TOOL_REGISTRY: list[ToolSpec] = [
         description="Read a storm window's post-storm review: the incidents the declaration stamped, their severity bands, closures and storm-only ETR accuracy, assembled from artefacts after stand-down (Round 8).",
     ),
     ToolSpec(
+        name="get_incident_review",
+        shape=ToolShape.READ,
+        description="Read an incident's post-incident review: the standing review artefact re-performing the incident's whole timeline from its artefacts of record — foundation, severity and ETR history, work orders, the field record, restoration and closure, lineage — with its completeness graded on its face, absences named with their reasons (Round 15).",
+    ),
+    ToolSpec(
         name="get_console_board",
         shape=ToolShape.READ,
         description="Read the operations board: open incidents by severity with their mode stamps, the feeder board, the ETR board with basis labels, the work-order queue, the storm banner and the latest shift handover — assembled only from artefacts of record (Round 9).",

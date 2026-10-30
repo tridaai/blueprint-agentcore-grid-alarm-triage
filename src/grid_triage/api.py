@@ -42,6 +42,7 @@ from grid_triage.access import (
     SURFACE_ETR,
     SURFACE_FIELD_UPDATES,
     SURFACE_INCIDENT,
+    SURFACE_INCIDENT_REVIEW,
     SURFACE_MEMORY,
     SURFACE_MODEL_LEDGER,
     SURFACE_OVERSIGHT,
@@ -70,6 +71,7 @@ from grid_triage.oversight import OversightRefusal
 from grid_triage.packs import PackRefusal
 from grid_triage.quarantine import QuarantineRefusal
 from grid_triage.restoration import RestorationRefusal
+from grid_triage.review import ReviewRefusal
 from grid_triage.revisions import RevisionRefusal, TopologyRefusal, UpdateRefusal
 from grid_triage.services import DuplicateAlarm
 from grid_triage.severity import SeverityRefusal
@@ -1787,6 +1789,140 @@ def get_model_ledger(incident_id: str, request: Request) -> dict:
     body = s.model_gateway.ledger_view(incident_id)
     body["incident_id"] = incident_id
     return body
+
+
+# -- Round 15: the post-incident review ------------------------
+
+
+class StrikeReviewRequest(BaseModel):
+    struck_by: str
+    role: str
+    struck_at: datetime | None = None
+
+
+@app.post("/incidents/{incident_id}/review")
+def strike_review(
+    incident_id: str, request: StrikeReviewRequest, http_request: Request
+) -> dict:
+    """The strike act. Existence is judged first, as on every
+    incident-scoped surface: a carried principal who may not
+    read incidents is answered exactly as a non-existent
+    incident is. Then the service judges the act itself (the
+    strike_incident_review act, the named human, the role)."""
+    principal = _guard_incident(
+        http_request,
+        incident_id,
+        SURFACE_INCIDENT_REVIEW,
+        not_found_detail=f"no such incident: {incident_id}",
+    )
+    s = svc()
+    try:
+        review = s.reviews.strike(
+            incident_id,
+            request.struck_by,
+            request.role,
+            request.struck_at or datetime.now(timezone.utc),
+            principal=principal,
+        )
+    except AccessDeniedError as exc:
+        raise _forbidden(exc) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ReviewRefusal as exc:
+        raise HTTPException(
+            status_code=422, detail={"problems": exc.problems}
+        ) from exc
+    return s.reviews.view(review)
+
+
+@app.get("/incidents/{incident_id}/review")
+def get_incident_review_head(incident_id: str, request: Request) -> dict:
+    _guard_incident(
+        request,
+        incident_id,
+        SURFACE_INCIDENT_REVIEW,
+        not_found_detail=f"no such incident: {incident_id}",
+    )
+    s = svc()
+    if s.store.get_incident(incident_id) is None:
+        raise HTTPException(
+            status_code=404, detail=f"no such incident: {incident_id}"
+        )
+    review = s.reviews.head_for_incident(incident_id)
+    if review is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"no incident review struck for incident: {incident_id}",
+        )
+    return s.reviews.view(review)
+
+
+@app.get("/incidents/{incident_id}/reviews")
+def list_incident_reviews(incident_id: str, request: Request) -> dict:
+    _guard_incident(
+        request,
+        incident_id,
+        SURFACE_INCIDENT_REVIEW,
+        not_found_detail=f"no such incident: {incident_id}",
+    )
+    s = svc()
+    if s.store.get_incident(incident_id) is None:
+        raise HTTPException(
+            status_code=404, detail=f"no such incident: {incident_id}"
+        )
+    return {
+        "reviews": [
+            s.reviews.view(r) for r in s.reviews.reviews(incident_id)
+        ]
+    }
+
+
+def _guard_review(request: Request, review_id: str):
+    """Existence hiding for a single review, keyed on the
+    incident it reviews: a carried principal who may not read
+    that incident is answered with the review's own not-found,
+    byte for byte as a non-existent review earns. Returns the
+    review (or None) so the caller answers its own 404."""
+    s = svc()
+    review = s.reviews.get(review_id)
+    principal = _principal(
+        request, surface=SURFACE_INCIDENT_REVIEW, target=review_id
+    )
+    if principal is not None and review is not None:
+        try:
+            s.access.require_incident_read(
+                principal,
+                SURFACE_INCIDENT_REVIEW,
+                incident_id=review.incident_id,
+            )
+        except AccessDeniedError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail=f"no such incident review: {review_id}",
+            ) from exc
+    return review
+
+
+@app.get("/reviews/{review_id}")
+def get_review(review_id: str, request: Request) -> dict:
+    review = _guard_review(request, review_id)
+    if review is None:
+        raise HTTPException(
+            status_code=404, detail=f"no such incident review: {review_id}"
+        )
+    return svc().reviews.view(review)
+
+
+@app.get("/reviews/{review_id}/verify")
+def verify_review(review_id: str, request: Request) -> dict:
+    review = _guard_review(request, review_id)
+    if review is None:
+        raise HTTPException(
+            status_code=404, detail=f"no such incident review: {review_id}"
+        )
+    s = svc()
+    problems = s.reviews.verify_review(review_id)
+    return {"review_id": review_id, "problems": problems}
 
 
 # -- Round 14: the injection quarantine -----------------------
